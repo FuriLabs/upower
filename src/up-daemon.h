@@ -82,6 +82,10 @@ UpDeviceLevel	 up_daemon_compute_warning_level(UpDaemon		*daemon,
 						 gboolean		 power_supply,
 						 gdouble		 percentage,
 						 gint64			 time_to_empty);
+const gchar	*up_daemon_get_charge_icon	(UpDaemon		*daemon,
+						 gdouble		 percentage,
+						 UpDeviceLevel		 battery_level,
+						 gboolean		 charging);
 
 void		 up_daemon_start_poll		(GObject		*object,
 						 GSourceFunc		 callback);

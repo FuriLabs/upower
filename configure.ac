@@ -2,7 +2,7 @@ dnl Process this file with autoconf to produce a configure script.
 
 m4_define([up_major_version], [0])
 m4_define([up_minor_version], [99])
-m4_define([up_micro_version], [11])
+m4_define([up_micro_version], [13])
 m4_define([up_version],
           [up_major_version.up_minor_version.up_micro_version])
 
@@ -198,12 +198,13 @@ AC_SUBST(BACKEND, "$with_backend")
 # only need GUdev on linux
 have_idevice=no
 if test x$with_backend = xlinux; then
-	PKG_CHECK_MODULES(GUDEV, [gudev-1.0 >= 147])
-	PKG_CHECK_MODULES(USB, [libusb-1.0 >= 1.0.0])
+	PKG_CHECK_MODULES(GUDEV, [gudev-1.0 >= 235])
 	AC_ARG_WITH(idevice, AS_HELP_STRING([--without-idevice],[Build without libimobiledevice]),
 		    with_idevice=$withval,with_idevice=yes)
+	LIBPLIST_DEP=libplist
+	PKG_CHECK_EXISTS(libplist-2.0, LIBPLIST_DEP=libplist-2.0)
 	AS_IF([test "x$with_idevice" != "xno"],
-	      [PKG_CHECK_MODULES(IDEVICE, libimobiledevice-1.0 >= 0.9.7 libplist >= 0.12, have_idevice=yes, have_idevice=no)],
+	      [PKG_CHECK_MODULES(IDEVICE, libimobiledevice-1.0 >= 0.9.7 $LIBPLIST_DEP, have_idevice=yes, have_idevice=no)],
 	      [have_idevice=no])
 	AS_IF([test "x$have_idevice" = "xyes"],
 	      [AC_DEFINE(HAVE_IDEVICE, 1, [Define to 1 if iDevice is going to be built])])

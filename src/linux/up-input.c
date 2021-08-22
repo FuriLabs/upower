@@ -22,39 +22,42 @@
 #  include "config.h"
 #endif
 
-#include <string.h>
-#include <math.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <linux/input.h>
 
 #include <glib.h>
 #include <glib/gstdio.h>
-#include <glib/gi18n-lib.h>
 #include <glib-object.h>
-#include <gudev/gudev.h>
 
-#include "sysfs-utils.h"
-#include "up-types.h"
-#include "up-daemon.h"
 #include "up-input.h"
-#include "up-daemon.h"
 
-struct UpInputPrivate
+struct _UpInput
 {
+	GObject			 parent_instance;
+
+	guint			 watched_switch;
+	int			 last_switch_state;
 	int			 eventfp;
 	struct input_event	 event;
 	gsize			 offset;
 	GIOChannel		*channel;
-	UpDaemon		*daemon;
 };
 
-G_DEFINE_TYPE_WITH_PRIVATE (UpInput, up_input, G_TYPE_OBJECT)
+G_DEFINE_TYPE (UpInput, up_input, G_TYPE_OBJECT)
+
+enum {
+	PROP_0,
+	PROP_WATCHED_SWITCH
+};
+
+enum {
+	SWITCH_CHANGED,
+	LAST_SIGNAL
+};
+
+static guint signals[LAST_SIGNAL] = { 0 };
 
 /* we must use this kernel-compatible implementation */
 #define BITS_PER_LONG (sizeof(long) * 8)
@@ -63,6 +66,26 @@ G_DEFINE_TYPE_WITH_PRIVATE (UpInput, up_input, G_TYPE_OBJECT)
 #define BIT(x)  (1UL<<OFF(x))
 #define LONG(x) ((x)/BITS_PER_LONG)
 #define test_bit(bit, array)    ((array[LONG(bit)] >> OFF(bit)) & 1)
+
+
+/**
+ * up_input_get_device_sysfs_path:
+ **/
+static char *
+up_input_get_device_sysfs_path (GUdevDevice *device)
+{
+  const char *root;
+
+  g_return_val_if_fail (G_UDEV_IS_DEVICE (device), FALSE);
+
+  root = g_getenv ("UMOCKDEV_DIR");
+  if (!root || *root == '\0')
+    return g_strdup (g_udev_device_get_sysfs_path (device));
+
+  return g_build_filename (root,
+                           g_udev_device_get_sysfs_path (device),
+                           NULL);
+}
 
 /**
  * up_input_str_to_bitmask:
@@ -102,7 +125,6 @@ up_input_event_io (GIOChannel *channel, GIOCondition condition, gpointer data)
 	GError *error = NULL;
 	gsize read_bytes;
 	glong bitmask[NBITS(SW_MAX)];
-	gboolean ret;
 
 	/* uninteresting */
 	if (condition & (G_IO_HUP | G_IO_ERR | G_IO_NVAL))
@@ -110,34 +132,34 @@ up_input_event_io (GIOChannel *channel, GIOCondition condition, gpointer data)
 
 	/* read event */
 	while (g_io_channel_read_chars (channel,
-		((gchar*)&input->priv->event) + input->priv->offset,
-		sizeof(struct input_event) - input->priv->offset,
+		((gchar*)&input->event) + input->offset,
+		sizeof(struct input_event) - input->offset,
 		&read_bytes, &error) == G_IO_STATUS_NORMAL) {
 
 		/* not enough data */
-		if (input->priv->offset + read_bytes < sizeof (struct input_event)) {
-			input->priv->offset = input->priv->offset + read_bytes;
+		if (input->offset + read_bytes < sizeof (struct input_event)) {
+			input->offset = input->offset + read_bytes;
 			g_debug ("incomplete read");
 			goto out;
 		}
 
 		/* we have all the data */
-		input->priv->offset = 0;
+		input->offset = 0;
 
 		g_debug ("event.value=%d ; event.code=%d (0x%02x)",
-			   input->priv->event.value,
-			   input->priv->event.code,
-			   input->priv->event.code);
+			   input->event.value,
+			   input->event.code,
+			   input->event.code);
 
 		/* switch? */
-		if (input->priv->event.type != EV_SW) {
+		if (input->event.type != EV_SW) {
 			g_debug ("not a switch event");
 			continue;
 		}
 
-		/* is not lid */
-		if (input->priv->event.code != SW_LID) {
-			g_debug ("not a lid");
+		/* is not the watched switch */
+		if (input->event.code != input->watched_switch) {
+			g_debug ("not the watched switch");
 			continue;
 		}
 
@@ -148,8 +170,10 @@ up_input_event_io (GIOChannel *channel, GIOCondition condition, gpointer data)
 		}
 
 		/* are we set */
-		ret = test_bit (input->priv->event.code, bitmask);
-		up_daemon_set_lid_is_closed (input->priv->daemon, ret);
+		input->last_switch_state = test_bit (input->event.code, bitmask);
+		g_signal_emit_by_name (G_OBJECT (input),
+				       "switch-changed",
+				       input->last_switch_state);
 	}
 out:
 	return TRUE;
@@ -159,12 +183,12 @@ out:
  * up_input_coldplug:
  **/
 gboolean
-up_input_coldplug (UpInput *input, UpDaemon *daemon, GUdevDevice *d)
+up_input_coldplug (UpInput *input, GUdevDevice *d)
 {
 	gboolean ret = FALSE;
 	gchar *path;
 	gchar *contents = NULL;
-	const gchar *native_path;
+	gchar *native_path = NULL;
 	const gchar *device_file;
 	GError *error = NULL;
 	glong bitmask[NBITS(SW_MAX)];
@@ -172,18 +196,21 @@ up_input_coldplug (UpInput *input, UpDaemon *daemon, GUdevDevice *d)
 	GIOStatus status;
 
 	/* get sysfs path */
-	native_path = g_udev_device_get_sysfs_path (d);
+	native_path = up_input_get_device_sysfs_path (d);
 
 	/* is a switch */
 	path = g_build_filename (native_path, "../capabilities/sw", NULL);
 	if (!g_file_test (path, G_FILE_TEST_EXISTS)) {
-		g_debug ("not a switch [%s]", path);
-		g_free (path);
-		path = g_build_filename (native_path, "capabilities/sw", NULL);
-		if (!g_file_test (path, G_FILE_TEST_EXISTS)) {
+		char *path2;
+		path2 = g_build_filename (native_path, "capabilities/sw", NULL);
+		if (!g_file_test (path2, G_FILE_TEST_EXISTS)) {
 			g_debug ("not a switch [%s]", path);
+			g_debug ("not a switch [%s]", path2);
+			g_free (path2);
 			goto out;
 		}
+		g_free (path);
+		path = path2;
 	}
 
 	/* get caps */
@@ -202,9 +229,9 @@ up_input_coldplug (UpInput *input, UpDaemon *daemon, GUdevDevice *d)
 		goto out;
 	}
 
-	/* is this a lid? */
-	if (!test_bit (SW_LID, bitmask)) {
-		g_debug ("not a lid: %s", native_path);
+	/* is this the watched switch? */
+	if (!test_bit (input->watched_switch, bitmask)) {
+		g_debug ("not the watched switch: %s", native_path);
 		ret = FALSE;
 		goto out;
 	}
@@ -218,26 +245,26 @@ up_input_coldplug (UpInput *input, UpDaemon *daemon, GUdevDevice *d)
 	}
 
 	/* open device file */
-	input->priv->eventfp = open (device_file, O_RDONLY | O_NONBLOCK);
-	if (input->priv->eventfp <= 0) {
+	input->eventfp = open (device_file, O_RDONLY | O_NONBLOCK);
+	if (input->eventfp <= 0) {
 		g_warning ("cannot open '%s': %s", device_file, strerror (errno));
 		ret = FALSE;
 		goto out;
 	}
 
 	/* get initial state */
-	if (ioctl (input->priv->eventfp, EVIOCGSW(sizeof (bitmask)), bitmask) < 0) {
+	if (ioctl (input->eventfp, EVIOCGSW(sizeof (bitmask)), bitmask) < 0) {
 		g_warning ("ioctl EVIOCGSW on %s failed", native_path);
 		ret = FALSE;
 		goto out;
 	}
 
 	/* create channel */
-	g_debug ("watching %s (%i)", device_file, input->priv->eventfp);
-	input->priv->channel = g_io_channel_unix_new (input->priv->eventfp);
+	g_debug ("watching %s (%i)", device_file, input->eventfp);
+	input->channel = g_io_channel_unix_new (input->eventfp);
 
 	/* set binary encoding */
-	status = g_io_channel_set_encoding (input->priv->channel, NULL, &error);
+	status = g_io_channel_set_encoding (input->channel, NULL, &error);
 	if (status != G_IO_STATUS_NORMAL) {
 		g_warning ("failed to set encoding: %s", error->message);
 		g_error_free (error);
@@ -245,16 +272,15 @@ up_input_coldplug (UpInput *input, UpDaemon *daemon, GUdevDevice *d)
 		goto out;
 	}
 
-	/* save daemon */
-	input->priv->daemon = g_object_ref (daemon);
-
 	/* watch this */
-	g_io_add_watch (input->priv->channel, G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL, up_input_event_io, input);
+	g_io_add_watch (input->channel, G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL, up_input_event_io, input);
 
 	/* set if we are closed */
-	g_debug ("using %s for lid event", native_path);
-	up_daemon_set_lid_is_closed (input->priv->daemon, test_bit (SW_LID, bitmask));
+	g_debug ("using %s for watched switch event", native_path);
+	input->last_switch_state = test_bit (input->watched_switch, bitmask);
+
 out:
+	g_free (native_path);
 	g_free (path);
 	g_free (contents);
 	return ret;
@@ -266,8 +292,8 @@ out:
 static void
 up_input_init (UpInput *input)
 {
-	input->priv = up_input_get_instance_private (input);
-	input->priv->eventfp = -1;
+	input->eventfp = -1;
+	input->last_switch_state = -1;
 }
 
 /**
@@ -282,17 +308,49 @@ up_input_finalize (GObject *object)
 	g_return_if_fail (UP_IS_INPUT (object));
 
 	input = UP_INPUT (object);
-	g_return_if_fail (input->priv != NULL);
 
-	g_clear_object (&input->priv->daemon);
-	if (input->priv->channel) {
-		g_io_channel_shutdown (input->priv->channel, FALSE, NULL);
-		input->priv->eventfp = -1;
-		g_io_channel_unref (input->priv->channel);
+	if (input->channel) {
+		g_io_channel_shutdown (input->channel, FALSE, NULL);
+		input->eventfp = -1;
+		g_io_channel_unref (input->channel);
 	}
-	if (input->priv->eventfp >= 0)
-		close (input->priv->eventfp);
+	if (input->eventfp >= 0)
+		close (input->eventfp);
 	G_OBJECT_CLASS (up_input_parent_class)->finalize (object);
+}
+
+static void
+up_input_set_property (GObject        *object,
+		       guint           property_id,
+		       const GValue   *value,
+		       GParamSpec     *pspec)
+{
+	UpInput *input = UP_INPUT (object);
+
+	switch (property_id) {
+	case PROP_WATCHED_SWITCH:
+		input->watched_switch = g_value_get_uint (value);
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
+	}
+}
+
+static void
+up_input_get_property (GObject        *object,
+		       guint           property_id,
+		       GValue         *value,
+		       GParamSpec     *pspec)
+{
+	UpInput *input = UP_INPUT (object);
+
+	switch (property_id) {
+	case PROP_WATCHED_SWITCH:
+		g_value_set_uint (value, input->watched_switch);
+		break;
+	default:
+		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
+	}
 }
 
 /**
@@ -303,10 +361,32 @@ up_input_class_init (UpInputClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
 	object_class->finalize = up_input_finalize;
+	object_class->set_property = up_input_set_property;
+	object_class->get_property = up_input_get_property;
+
+	g_object_class_install_property (object_class, PROP_WATCHED_SWITCH,
+					 g_param_spec_uint("watched-switch",
+							    "Watched switch",
+							    "The input switch to watch",
+							    SW_LID, SW_MAX, SW_LID,
+							    G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+	signals[SWITCH_CHANGED] = g_signal_new ("switch-changed",
+						 G_TYPE_FROM_CLASS (klass),
+						 G_SIGNAL_RUN_LAST,
+						 0,
+						 NULL,
+						 NULL,
+						 g_cclosure_marshal_generic,
+						 G_TYPE_NONE,
+						 1,
+						 G_TYPE_BOOLEAN);
 }
 
 /**
  * up_input_new:
+ *
+ * Returns a #UpInput that watches the computer lid switch.
  **/
 UpInput *
 up_input_new (void)
@@ -314,3 +394,33 @@ up_input_new (void)
 	return g_object_new (UP_TYPE_INPUT, NULL);
 }
 
+/**
+ * up_input_new_for_switch:
+ * @watched_switch: the identifier for the `SW_` switch to watch
+ *
+ * Returns a #UpInput that watches the switched passed as argument.
+ **/
+UpInput *
+up_input_new_for_switch (guint watched_switch)
+{
+	return g_object_new (UP_TYPE_INPUT,
+			     "watched-switch", watched_switch,
+			     NULL);
+}
+
+/**
+ * up_input_get_switch_value:
+ * @input: a #UpInput
+ *
+ * Returns the last state of the switch. It is an error
+ * to call this without having successfully run
+ * up_input_coldplug().
+ **/
+gboolean
+up_input_get_switch_value (UpInput *input)
+{
+	g_return_val_if_fail (UP_IS_INPUT(input), FALSE);
+	g_return_val_if_fail (input->last_switch_state != -1, FALSE);
+
+	return input->last_switch_state;
+}

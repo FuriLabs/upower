@@ -41,7 +41,6 @@
 #include <getopt.h>
 #include <errno.h>
 
-#include "sysfs-utils.h"
 #include "up-types.h"
 #include "up-device-wup.h"
 
@@ -296,10 +295,10 @@ up_device_wup_coldplug (UpDevice *device)
 	gboolean ret = FALSE;
 	const gchar *device_file;
 	const gchar *type;
-	const gchar *native_path;
 	gchar *data;
 	const gchar *vendor;
 	const gchar *product;
+	g_autofree char *serial = NULL;
 
 	/* detect what kind of device we are */
 	native = G_UDEV_DEVICE (up_device_get_native (device));
@@ -358,7 +357,9 @@ up_device_wup_coldplug (UpDevice *device)
 		product = g_udev_device_get_property (native, "ID_PRODUCT");
 
 	/* hardcode some values */
-	native_path = g_udev_device_get_sysfs_path (native);
+	serial = g_strdup (g_udev_device_get_sysfs_attr (native, "serial"));
+	if (serial)
+		g_strstrip (serial);
 	g_object_set (device,
 		      "type", UP_DEVICE_KIND_MONITOR,
 		      "is-rechargeable", FALSE,
@@ -366,7 +367,7 @@ up_device_wup_coldplug (UpDevice *device)
 		      "is-present", FALSE,
 		      "vendor", vendor,
 		      "model", product,
-		      "serial", g_strstrip (sysfs_get_string (native_path, "serial")),
+		      "serial", serial,
 		      "has-history", TRUE,
 		      "state", UP_DEVICE_STATE_DISCHARGING,
 		      NULL);

@@ -24,6 +24,7 @@ import tempfile
 import subprocess
 import unittest
 import time
+from packaging.version import parse as parse_version
 
 try:
     import gi
@@ -39,7 +40,7 @@ try:
     gi.require_version('UMockdev', '1.0')
     from gi.repository import UMockdev
 except ImportError:
-    sys.stderr.write('Skipping tests, umockdev not available (https://launchpad.net/umockdev/)\n')
+    sys.stderr.write('Skipping tests, umockdev not available (https://github.com/martinpitt/umockdev)\n')
     sys.exit(0)
 
 try:
@@ -52,6 +53,7 @@ except ImportError:
 UP = 'org.freedesktop.UPower'
 UP_DEVICE = 'org.freedesktop.UPower.Device'
 UP_DISPLAY_OBJECT_PATH = '/org/freedesktop/UPower/devices/DisplayDevice'
+UP_DAEMON_ACTION_DELAY = 20
 
 DEVICE_IFACE = 'org.bluez.Device1'
 BATTERY_IFACE = 'org.bluez.Battery1'
@@ -62,7 +64,7 @@ BATTERY_IFACE = 'org.bluez.Battery1'
  UP_DEVICE_STATE_EMPTY,
  UP_DEVICE_STATE_FULLY_CHARGED,
  UP_DEVICE_STATE_PENDING_CHARGE,
- UP_DEVICE_STATE_PENDING_DISCHARGE) = (0, 1, 2, 3, 4, 5, 6)
+ UP_DEVICE_STATE_PENDING_DISCHARGE) = range(7)
 
 (UP_DEVICE_LEVEL_UNKNOWN,
  UP_DEVICE_LEVEL_NONE,
@@ -72,7 +74,7 @@ BATTERY_IFACE = 'org.bluez.Battery1'
  UP_DEVICE_LEVEL_ACTION,
  UP_DEVICE_LEVEL_NORMAL,
  UP_DEVICE_LEVEL_HIGH,
- UP_DEVICE_LEVEL_FULL) = (0, 1, 2, 3, 4, 5, 6, 7, 8)
+ UP_DEVICE_LEVEL_FULL) = range(9)
 
 (UP_DEVICE_KIND_UNKNOWN,
  UP_DEVICE_KIND_LINE_POWER,
@@ -86,7 +88,23 @@ BATTERY_IFACE = 'org.bluez.Battery1'
  UP_DEVICE_KIND_MEDIA_PLAYER,
  UP_DEVICE_KIND_TABLET,
  UP_DEVICE_KIND_COMPUTER,
- UP_DEVICE_KIND_GAMING_INPUT) = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+ UP_DEVICE_KIND_GAMING_INPUT,
+ UP_DEVICE_KIND_PEN,
+ UP_DEVICE_KIND_TOUCHPAD,
+ UP_DEVICE_KIND_MODEM,
+ UP_DEVICE_KIND_NETWORK,
+ UP_DEVICE_KIND_HEADSET,
+ UP_DEVICE_KIND_SPEAKERS,
+ UP_DEVICE_KIND_HEADPHONES,
+ UP_DEVICE_KIND_VIDEO,
+ UP_DEVICE_KIND_OTHER_AUDIO,
+ UP_DEVICE_KIND_REMOTE_CONTROL,
+ UP_DEVICE_KIND_PRINTER,
+ UP_DEVICE_KIND_SCANNER,
+ UP_DEVICE_KIND_CAMERA,
+ UP_DEVICE_KIND_WEARABLE,
+ UP_DEVICE_KIND_TOY,
+ UP_DEVICE_KIND_BLUETOOTH_GENERIC) = range(29)
 
 class Tests(dbusmock.DBusTestCase):
     @classmethod
@@ -183,7 +201,7 @@ class Tests(dbusmock.DBusTestCase):
         this only works with coldplugging, as we do not currently have a way to
         inject simulated uevents.
 
-        When done, this sets self.proxy a the Gio.DBusProxy for upowerd.
+        When done, this sets self.proxy as the Gio.DBusProxy for upowerd.
         '''
         env = os.environ.copy()
         if cfgfile is not None:
@@ -276,7 +294,7 @@ class Tests(dbusmock.DBusTestCase):
         with open(self.log.name) as f:
             return f.read().count(text)
 
-    def assertEventually(self, condition, message=None, timeout=50):
+    def assertEventually(self, condition, message=None, timeout=50, value=True):
         '''Assert that condition function eventually returns True.
 
         Timeout is in deciseconds, defaulting to 50 (5 seconds). message is
@@ -286,7 +304,7 @@ class Tests(dbusmock.DBusTestCase):
             context = GLib.MainContext.default()
             while context.iteration(False):
                 pass
-            if condition():
+            if condition() == value:
                 break
             timeout -= 1
             time.sleep(0.1)
@@ -350,6 +368,32 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
         self.assertEqual(self.get_dbus_dev_property(devs[0], 'Online'), False)
         self.stop_daemon()
+
+    def test_macbook_capacity(self):
+        '''MacBooks have incorrect sysfs capacity'''
+
+        ac = self.testbed.add_device('power_supply', 'AC', None,
+                                     ['type', 'Mains', 'online', '0'], [])
+        bat0 = self.testbed.add_device('power_supply', 'BAT0', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'Discharging',
+                                        'capacity', '60',
+                                        'energy_full', '60000000',
+                                        'energy_full_design', '80000000',
+                                        'energy_now', '48000000',
+                                        'voltage_now', '12000000'], [])
+        self.testbed.add_device('virtual', 'virtual/dmi', None,
+                                ['id/product_name', 'MacBookAir7,2'], [])
+        self.start_daemon()
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 2)
+        if 'BAT' in devs[0] == ac_up:
+            (bat0_up, ac_up) = devs
+        else:
+            (ac_up, bat0_up) = devs
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), 80)
 
     def test_macbook_uevent(self):
         '''MacBooks sent uevent 5 seconds before battery updates'''
@@ -791,6 +835,28 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('IsPresent'), True)
         self.stop_daemon()
 
+    def test_battery_zero_power_draw(self):
+        '''Battery with zero power draw, e.g. in a dual-battery system'''
+
+        self.testbed.add_device('power_supply', 'BAT0', None,
+                                ['type', 'Battery',
+                                 'present', '1',
+                                 'status', 'Full',
+                                 'energy_full', '60000000',
+                                 'energy_full_design', '80000000',
+                                 'energy_now', '60000000',
+                                 'voltage_now', '12000000',
+                                 'power_now', '0',
+                                 'current_now', '787000'], [])
+
+        self.start_daemon()
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'EnergyRate'), 0.0)
+        self.stop_daemon()
+
     def test_ups_no_ac(self):
         '''UPS properties without AC'''
 
@@ -915,6 +981,51 @@ class Tests(dbusmock.DBusTestCase):
 
         self.stop_daemon()
 
+    @unittest.skipIf(parse_version(dbusmock.__version__) <= parse_version('0.23.1'), 'Not supported in dbusmock version')
+    def test_prevent_sleep_until_critical_action_is_executed(self):
+        '''check that critical action is executed when trying to suspend'''
+
+        bat0 = self.testbed.add_device('power_supply', 'BAT0', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'Discharging',
+                                        'energy_full', '60000000',
+                                        'energy_full_design', '80000000',
+                                        'energy_now', '50000000',
+                                        'voltage_now', '12000000'], [])
+
+        config = tempfile.NamedTemporaryFile(delete=False, mode='w')
+        config.write("[UPower]\n")
+        config.write("UsePercentageForPolicy=true\n")
+        config.write("PercentageAction=5\n")
+        config.write("CriticalPowerAction=Hibernate\n")
+        config.close()
+
+        self.start_logind()
+        self.start_daemon(cfgfile=config.name)
+
+        # delay inhibitor taken
+        self.assertEqual(len(self.logind_obj.ListInhibitors()), 1)
+
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        # simulate that battery has 1% (less than PercentageAction)
+        self.testbed.set_attribute(bat0, 'energy_now', '600000')
+        self.testbed.uevent(bat0, 'change')
+
+        # critical action is scheduled, a block inhibitor lock is taken besides a delay inhibitor lock
+        time.sleep(0.5)
+        self.assertEventually(lambda: self.get_dbus_display_property('WarningLevel'), value=UP_DEVICE_LEVEL_ACTION)
+        self.assertEqual(len(self.logind_obj.ListInhibitors()), 2)
+
+        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
+        self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 1)
+
+        # block inhibitor lock is released
+        self.assertEqual(len(self.logind_obj.ListInhibitors()), 1)
+
     def test_critical_action_is_taken_repeatedly(self):
         '''check that critical action works repeatedly (eg. after resume)'''
 
@@ -948,7 +1059,7 @@ class Tests(dbusmock.DBusTestCase):
         time.sleep(0.5)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_ACTION)
 
-        time.sleep(20.5) # wait for UP_DAEMON_ACTION_DELAY
+        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
         self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 1)
 
         # simulate that battery was charged to 100% during sleep
@@ -965,7 +1076,7 @@ class Tests(dbusmock.DBusTestCase):
         time.sleep(0.5)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_ACTION)
 
-        time.sleep(20.5) # wait for UP_DAEMON_ACTION_DELAY
+        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
         self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 2)
 
         self.stop_daemon()
@@ -1007,6 +1118,42 @@ class Tests(dbusmock.DBusTestCase):
         self.assertFalse(self.have_text_in_log("Setup poll for"))
         self.assertFalse(self.have_text_in_log("Poll paused for"))
         self.assertFalse(self.have_text_in_log("Poll resumed for"))
+
+        os.unlink(config.name)
+
+    def test_percentage_low_icon_set(self):
+        '''Without battery level, PercentageLow is limit for icon change'''
+
+        bat0 = self.testbed.add_device('power_supply', 'BAT0', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'Discharging',
+                                        'energy_full',        '100000000',
+                                        'energy_full_design', '100000000',
+                                        'energy_now',          '15000000',
+                                        'capacity', '15',
+                                        'voltage_now', '12000000'], [])
+
+        config = tempfile.NamedTemporaryFile(delete=False, mode='w')
+        # Low, Critical and Action are all needed to avoid fallback to defaults
+        config.write("[UPower]\n")
+        config.write("PercentageLow=20\n")
+        config.write("PercentageCritical=3\n")
+        config.write("PercentageAction=2\n")
+        config.close()
+
+        self.start_daemon(cfgfile=config.name)
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        # capacity_level is unused because a 'capacity' attribute is present and used instead
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'BatteryLevel'), UP_DEVICE_LEVEL_NONE)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), 15.0)
+        # Battery below 20% from config, should set 'caution' icon even if over default (10%)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'IconName'), 'battery-caution-symbolic')
+
+        self.stop_daemon()
 
         os.unlink(config.name)
 
@@ -1270,11 +1417,11 @@ class Tests(dbusmock.DBusTestCase):
             'input',
             '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009/0003:046D:4101.000A/input/input22',
             parent,
-            [], ['DEVNAME', 'input/mouse3', 'ID_INPUT_TOUCHPAD', '1'])
+            [], ['DEVNAME', 'input/mouse3', 'ID_INPUT_TOUCHPAD', '1', 'ID_INPUT_MOUSE', '1'])
         self.testbed.uevent(batt_dev, 'change')
 
         time.sleep(0.5)
-        self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Type'), UP_DEVICE_KIND_MOUSE)
+        self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Type'), UP_DEVICE_KIND_TOUCHPAD)
 
     def test_hidpp_touchpad(self):
         '''HID++ touchpad battery with 5 capacity levels'''
@@ -1289,7 +1436,7 @@ class Tests(dbusmock.DBusTestCase):
             'input',
             '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009/0003:046D:4101.000A/input/input22',
             parent,
-            [], ['DEVNAME', 'input/mouse3', 'ID_INPUT_TOUCHPAD', '1'])
+            [], ['DEVNAME', 'input/mouse3', 'ID_INPUT_TOUCHPAD', '1', 'ID_INPUT_MOUSE', '1'])
 
         dev = self.testbed.add_device(
             'power_supply',
@@ -1312,7 +1459,7 @@ class Tests(dbusmock.DBusTestCase):
 
         self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Model'), 'Logitech T650')
         self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'PowerSupply'), False)
-        self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Type'), UP_DEVICE_KIND_MOUSE)
+        self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Type'), UP_DEVICE_KIND_TOUCHPAD)
         self.assertEqual(self.get_dbus_dev_property(mousebat0_up, 'Serial'), '123456')
         self.assertEqual(self.get_dbus_property('OnBattery'), False)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
@@ -1551,9 +1698,54 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
         self.stop_daemon()
 
-    def test_bluetooth_le_mouse(self):
-        '''Bluetooth LE mouse'''
+    def test_bluetooth_mouse_and_keyboard(self):
+        '''keyboard/mouse combo battery'''
 
+        dev = self.testbed.add_device('bluetooth',
+                                      'usb2/bluetooth/hci0/hci0:1',
+                                      None,
+                                      [], [])
+
+        parent = dev
+        self.testbed.add_device(
+            'input',
+            'input3/event3',
+            parent,
+            [], ['DEVNAME', 'input/event3', 'ID_INPUT_MOUSE', '1'])
+
+        self.testbed.add_device(
+            'input',
+            'input3/event4',
+            parent,
+            [], ['DEVNAME', 'input/event4', 'ID_INPUT_KEYBOARD', '1'])
+
+        self.testbed.add_device(
+            'power_supply',
+            'power_supply/hid-00:22:33:44:55:66-battery',
+            parent,
+            ['type', 'Battery',
+             'scope', 'Device',
+             'present', '1',
+             'online', '1',
+             'status', 'Discharging',
+             'capacity', '40',
+             'model_name', 'Monster Typist Mouse/Keyboard Combo'],
+            [])
+
+        self.start_daemon()
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 1)
+        kbdbat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Model'), 'Monster Typist Mouse/Keyboard Combo')
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Percentage'), 40)
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Type'), UP_DEVICE_KIND_KEYBOARD)
+        self.assertEqual(self.get_dbus_property('OnBattery'), False)
+        self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
+        self.stop_daemon()
+
+    def _add_bluez_battery_device(self, alias, device_properties, battery_level):
         self.start_bluez()
 
         # Add an adapter to both bluez and udev
@@ -1566,26 +1758,21 @@ class Tests(dbusmock.DBusTestCase):
                                       None,
                                       [], [])
 
-        # Add a device to both bluez and udev
+        # Add a device to bluez
         address = '11:22:33:44:55:66'
-        alias = 'Arc Touch Mouse SE'
 
         path = self.bluez_obj.AddDevice(adapter_name, address, alias)
 
         device = self.dbus_con.get_object('org.bluez', path)
-        device.AddProperties(DEVICE_IFACE, { 'Appearance': dbus.UInt16(0x03c2, variant_level=1) })
 
-        properties = {
-            'Percentage': dbus.Byte(99, variant_level=1),
+        if device_properties:
+            device.AddProperties(DEVICE_IFACE, device_properties)
+
+        battery_properties = {
+            'Percentage': dbus.Byte(battery_level, variant_level=1),
         }
-        device.AddProperties(BATTERY_IFACE, properties)
 
-        parent = dev
-        self.testbed.add_device(
-            'input',
-            'input3/event4',
-            parent,
-            [], ['DEVNAME', 'input/event4', 'ID_INPUT_MOUSE', '1'])
+        device.AddProperties(BATTERY_IFACE, battery_properties)
 
         self.start_daemon()
 
@@ -1593,14 +1780,139 @@ class Tests(dbusmock.DBusTestCase):
 
         # Wait for UPower to process the new device
         time.sleep(0.5)
-        devs = self.proxy.EnumerateDevices()
+        return self.proxy.EnumerateDevices()
+
+    def test_bluetooth_le_mouse(self):
+        '''Bluetooth LE mouse'''
+
+        alias = 'Arc Touch Mouse SE'
+        battery_level = 99
+        device_properties = {
+            'Appearance': dbus.UInt16(0x03c2, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
         self.assertEqual(len(devs), 1)
         mouse_bat0_up = devs[0]
 
-        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Model'), 'Arc Touch Mouse SE')
-        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Percentage'), 99)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Percentage'), battery_level)
         self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'PowerSupply'), False)
         self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Type'), UP_DEVICE_KIND_MOUSE)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'UpdateTime') != 0, True)
+        self.stop_daemon()
+
+    def test_bluetooth_le_device(self):
+        '''Bluetooth LE Device'''
+        '''See https://gitlab.freedesktop.org/upower/upower/issues/100'''
+
+        alias = 'Satechi M1 Mouse'
+        battery_level = 99
+        device_properties = None
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        mouse_bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(mouse_bat0_up, 'Type'), UP_DEVICE_KIND_BLUETOOTH_GENERIC)
+        self.stop_daemon()
+
+    def test_bluetooth_headphones(self):
+        '''Bluetooth Headphones'''
+
+        alias = 'WH-1000XM3'
+        battery_level = 99
+        device_properties = {
+            'Class': dbus.UInt32(0x240404, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Type'), UP_DEVICE_KIND_HEADSET)
+        self.stop_daemon()
+
+    def test_bluetooth_wireless_earbuds(self):
+        '''Bluetooth Wireless Earbuds'''
+
+        alias = 'QCY-qs2_R'
+        battery_level = 99
+        device_properties = {
+            'Class': dbus.UInt32(0x240418, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Type'), UP_DEVICE_KIND_HEADPHONES)
+        self.stop_daemon()
+
+    def test_bluetooth_phone(self):
+        '''Bluetooth Phone'''
+
+        alias = 'Phone'
+        battery_level = 99
+        device_properties = {
+            'Class': dbus.UInt32(0x5a020c, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Type'), UP_DEVICE_KIND_PHONE)
+        self.stop_daemon()
+
+    def test_bluetooth_computer(self):
+        '''Bluetooth Computer'''
+
+        alias = 'Computer'
+        battery_level = 99
+        device_properties = {
+            'Class': dbus.UInt32(0x6c010c, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Type'), UP_DEVICE_KIND_COMPUTER)
+        self.stop_daemon()
+
+    def test_bluetooth_heart_rate_monitor(self):
+        '''Bluetooth Heart Rate Monitor'''
+
+        alias = 'Polar H7'
+        battery_level = 99
+        device_properties = {
+            'Appearance': dbus.UInt16(0x0341, variant_level=1)
+        }
+
+        devs = self._add_bluez_battery_device(alias, device_properties, battery_level)
+        self.assertEqual(len(devs), 1)
+        bat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Model'), alias)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Percentage'), battery_level)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Type'), UP_DEVICE_KIND_BLUETOOTH_GENERIC)
         self.stop_daemon()
 
     #
