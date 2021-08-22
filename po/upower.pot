@@ -6,9 +6,9 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: upower 0.99.11\n"
+"Project-Id-Version: upower 0.99.12\n"
 "Report-Msgid-Bugs-To: https://gitlab.freedesktop.org/upower/upower/issues\n"
-"POT-Creation-Date: 2019-09-03 08:50+0200\n"
+"POT-Creation-Date: 2021-04-22 15:38+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -35,26 +35,26 @@ msgstr ""
 msgid "Show extra debugging information"
 msgstr ""
 
-#: tools/up-tool.c:267
+#: tools/up-tool.c:261
 msgid "Enumerate objects paths for devices"
 msgstr ""
 
-#: tools/up-tool.c:268
+#: tools/up-tool.c:262
 msgid "Dump all parameters for all objects"
 msgstr ""
 
-#: tools/up-tool.c:269
+#: tools/up-tool.c:263
 msgid "Get the wakeup data"
 msgstr ""
 
-#: tools/up-tool.c:270
+#: tools/up-tool.c:264
 msgid "Monitor activity from the power daemon"
 msgstr ""
 
-#: tools/up-tool.c:271
+#: tools/up-tool.c:265
 msgid "Monitor with detail"
 msgstr ""
 
-#: tools/up-tool.c:272
+#: tools/up-tool.c:266
 msgid "Show information about object path"
 msgstr ""

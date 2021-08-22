@@ -52,11 +52,102 @@ appearance_to_kind (guint16 appearance)
                         return UP_DEVICE_KIND_GAMING_INPUT;
                 case 0x05:
                         return UP_DEVICE_KIND_TABLET;
+                case 0x0e:
+                case 0x0f:
+                        return UP_DEVICE_KIND_PEN;
                 }
                 break;
         }
 
-	return UP_DEVICE_KIND_UNKNOWN;
+	return UP_DEVICE_KIND_BLUETOOTH_GENERIC;
+}
+
+/**
+ * class_to_kind:
+ * @class: a Bluetooth device class
+ *
+ * Returns value: the type of device corresponding to the given @class value.
+ **/
+static UpDeviceKind
+class_to_kind (guint32 class)
+{
+	/*
+	 * See Bluetooth Assigned Numbers for Baseband
+	 * https://www.bluetooth.com/specifications/assigned-numbers/baseband/
+	 */
+
+	switch ((class & 0x1f00) >> 8) {
+	case 0x01:
+		return UP_DEVICE_KIND_COMPUTER;
+	case 0x02:
+		switch ((class & 0xfc) >> 2) {
+		case 0x01:
+		case 0x02:
+		case 0x03:
+		case 0x05:
+			return UP_DEVICE_KIND_PHONE;
+		case 0x04:
+			return UP_DEVICE_KIND_MODEM;
+		}
+		break;
+	case 0x03:
+		return UP_DEVICE_KIND_NETWORK;
+	case 0x04:
+		switch ((class & 0xfc) >> 2) {
+		case 0x01:
+		case 0x02:
+			return UP_DEVICE_KIND_HEADSET;
+		case 0x05:
+			return UP_DEVICE_KIND_SPEAKERS;
+		case 0x06:
+			return UP_DEVICE_KIND_HEADPHONES;
+		case 0x0b: /* VCR */
+		case 0x0c: /* Video Camera */
+		case 0x0d: /* Camcorder */
+			return UP_DEVICE_KIND_VIDEO;
+		default:
+			return UP_DEVICE_KIND_OTHER_AUDIO;
+		}
+		break;
+	case 0x05:
+		switch ((class & 0xc0) >> 6) {
+		case 0x00:
+			switch ((class & 0x1e) >> 2) {
+			case 0x01:
+			case 0x02:
+				return UP_DEVICE_KIND_GAMING_INPUT;
+			case 0x03:
+				return UP_DEVICE_KIND_REMOTE_CONTROL;
+			}
+			break;
+		case 0x01:
+			return UP_DEVICE_KIND_KEYBOARD;
+		case 0x02:
+			switch ((class & 0x1e) >> 2) {
+			case 0x05:
+				return UP_DEVICE_KIND_TABLET;
+			default:
+				return UP_DEVICE_KIND_MOUSE;
+			}
+		}
+		break;
+	case 0x06:
+		if (class & 0x80)
+			return UP_DEVICE_KIND_PRINTER;
+		if (class & 0x40)
+			return UP_DEVICE_KIND_SCANNER;
+		if (class & 0x20)
+			return UP_DEVICE_KIND_CAMERA;
+		if (class & 0x10)
+			return UP_DEVICE_KIND_MONITOR;
+		break;
+	case 0x07:
+		return UP_DEVICE_KIND_WEARABLE;
+	case 0x08:
+		return UP_DEVICE_KIND_TOY;
+	}
+
+	return UP_DEVICE_KIND_BLUETOOTH_GENERIC;
 }
 
 /**
@@ -73,7 +164,7 @@ up_device_bluez_coldplug (UpDevice *device)
 	UpDeviceKind kind;
 	const char *uuid;
 	const char *model;
-	guint16 appearance;
+	GVariant *v;
 	guchar percentage;
 
 	/* Static device properties */
@@ -93,10 +184,30 @@ up_device_bluez_coldplug (UpDevice *device)
 		return FALSE;
 	}
 
-	appearance = g_variant_get_uint16 (g_dbus_proxy_get_cached_property (proxy, "Appearance"));
-	kind = appearance_to_kind (appearance);
-	uuid = g_variant_get_string (g_dbus_proxy_get_cached_property (proxy, "Address"), NULL);
-	model = g_variant_get_string (g_dbus_proxy_get_cached_property (proxy, "Alias"), NULL);
+	v = g_dbus_proxy_get_cached_property (proxy, "Appearance");
+	if (v) {
+		guint16 appearance;
+
+		appearance = g_variant_get_uint16 (v);
+		kind = appearance_to_kind (appearance);
+		g_variant_unref (v);
+	} else if ((v = g_dbus_proxy_get_cached_property (proxy, "Class"))) {
+		guint32 class;
+
+		class = g_variant_get_uint32 (v);
+		kind = class_to_kind (class);
+		g_variant_unref (v);
+	} else {
+		kind = UP_DEVICE_KIND_BLUETOOTH_GENERIC;
+	}
+
+	v = g_dbus_proxy_get_cached_property (proxy, "Address");
+	uuid = g_variant_get_string (v, NULL);
+	g_variant_unref (v);
+
+	v = g_dbus_proxy_get_cached_property (proxy, "Alias");
+	model = g_variant_get_string (v, NULL);
+	g_variant_unref (v);
 
 	/* hardcode some values */
 	g_object_set (device,
@@ -130,6 +241,7 @@ up_device_bluez_coldplug (UpDevice *device)
 	g_object_set (device,
 		      "is-present", TRUE,
 		      "percentage", (gdouble) percentage,
+		      "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC,
 		      NULL);
 
 	g_object_unref (proxy);
@@ -154,7 +266,10 @@ up_device_bluez_update (UpDeviceBluez *bluez,
 	g_variant_iter_init (&iter, properties);
 	while (g_variant_iter_next (&iter, "{&sv}", &key, &value)) {
 		if (g_str_equal (key, "Percentage")) {
-			g_object_set (device, "percentage", (gdouble) g_variant_get_byte (value), NULL);
+			g_object_set (device,
+				      "percentage", (gdouble) g_variant_get_byte (value),
+				      "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC,
+				      NULL);
 		} else {
 			char *str = g_variant_print (value, TRUE);
 

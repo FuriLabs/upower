@@ -63,10 +63,6 @@ update_warning_level (UpDevice *device)
 	UpDeviceLevel warning_level, battery_level;
 	UpExportedDevice *skeleton = UP_EXPORTED_DEVICE (device);
 
-	/* Not finished setting up the object? */
-	if (device->priv->daemon == NULL)
-		return;
-
 	/* If the battery level is available, and is critical,
 	 * we need to fallback to calculations to get the warning
 	 * level, as that might be "action" at this point */
@@ -87,39 +83,6 @@ update_warning_level (UpDevice *device)
 	}
 
 	up_exported_device_set_warning_level (skeleton, warning_level);
-}
-
-static const gchar *
-get_device_charge_icon (gdouble       percentage,
-			UpDeviceLevel battery_level,
-			gboolean      charging)
-{
-	if (battery_level == UP_DEVICE_LEVEL_NONE) {
-		if (percentage < 10)
-			return charging ? "battery-caution-charging-symbolic" : "battery-caution-symbolic";
-		else if (percentage < 30)
-			return charging ? "battery-low-charging-symbolic" : "battery-low-symbolic";
-		else if (percentage < 60)
-			return charging ? "battery-good-charging-symbolic" : "battery-good-symbolic";
-		return charging ? "battery-full-charging-symbolic" : "battery-full-symbolic";
-	} else {
-		switch (battery_level) {
-		case UP_DEVICE_LEVEL_UNKNOWN:
-			/* The lack of symmetry is on purpose */
-			return charging ? "battery-good-charging-symbolic" : "battery-caution-symbolic";
-		case UP_DEVICE_LEVEL_LOW:
-		case UP_DEVICE_LEVEL_CRITICAL:
-			return charging ? "battery-caution-charging-symbolic" : "battery-caution-symbolic";
-		case UP_DEVICE_LEVEL_NORMAL:
-			return charging ? "battery-low-charging-symbolic" : "battery-low-symbolic";
-		case UP_DEVICE_LEVEL_HIGH:
-			return charging ? "battery-good-charging-symbolic" : "battery-good-symbolic";
-		case UP_DEVICE_LEVEL_FULL:
-			return charging ? "battery-full-charging-symbolic" : "battery-full-symbolic";
-		default:
-			g_assert_not_reached ();
-		}
-	}
 }
 
 /* This needs to be called when one of those properties changes:
@@ -152,14 +115,16 @@ update_icon_name (UpDevice *device)
 				break;
 			case UP_DEVICE_STATE_CHARGING:
 			case UP_DEVICE_STATE_PENDING_CHARGE:
-				icon_name = get_device_charge_icon (up_exported_device_get_percentage (skeleton),
-								    up_exported_device_get_battery_level (skeleton),
+				icon_name = up_daemon_get_charge_icon (device->priv->daemon,
+								       up_exported_device_get_percentage (skeleton),
+								       up_exported_device_get_battery_level (skeleton),
 								    TRUE);
 				break;
 			case UP_DEVICE_STATE_DISCHARGING:
 			case UP_DEVICE_STATE_PENDING_DISCHARGE:
-				icon_name = get_device_charge_icon (up_exported_device_get_percentage (skeleton),
-								    up_exported_device_get_battery_level (skeleton),
+				icon_name = up_daemon_get_charge_icon (device->priv->daemon,
+								       up_exported_device_get_percentage (skeleton),
+								       up_exported_device_get_battery_level (skeleton),
 								    FALSE);
 				break;
 			default:
@@ -191,6 +156,10 @@ static void
 up_device_notify (GObject *object, GParamSpec *pspec)
 {
 	UpDevice *device = UP_DEVICE (object);
+
+	/* Not finished setting up the object? */
+	if (device->priv->daemon == NULL)
+		return;
 
 	G_OBJECT_CLASS (up_device_parent_class)->notify (object, pspec);
 

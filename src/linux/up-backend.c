@@ -35,11 +35,7 @@
 #include "up-daemon.h"
 #include "up-device.h"
 
-#include "sysfs-utils.h"
-
 #include "up-device-supply.h"
-#include "up-device-csr.h"
-#include "up-device-unifying.h"
 #include "up-device-wup.h"
 #include "up-device-hid.h"
 #include "up-device-bluez.h"
@@ -66,7 +62,7 @@ struct UpBackendPrivate
 	UpConfig		*config;
 	GDBusProxy		*logind_proxy;
 	guint                    logind_sleep_id;
-	int                      logind_inhibitor_fd;
+	int                      logind_delay_inhibitor_fd;
 
 	/* BlueZ */
 	guint			 bluez_watch_id;
@@ -86,6 +82,33 @@ G_DEFINE_TYPE_WITH_PRIVATE (UpBackend, up_backend, G_TYPE_OBJECT)
 static gboolean up_backend_device_add (UpBackend *backend, GUdevDevice *native);
 static void up_backend_device_remove (UpBackend *backend, GUdevDevice *native);
 
+static void
+input_switch_changed_cb (UpInput   *input,
+			 gboolean   switch_value,
+			 UpBackend *backend)
+{
+	up_daemon_set_lid_is_closed (backend->priv->daemon, switch_value);
+}
+
+static gpointer
+is_macbook (gpointer data)
+{
+	g_autofree char *product = NULL;
+
+	if (!g_file_get_contents ("/sys/devices/virtual/dmi/id/product_name", &product, NULL, NULL) ||
+	    product == NULL)
+		return GINT_TO_POINTER(FALSE);
+	return GINT_TO_POINTER(g_str_has_prefix (product, "MacBook"));
+}
+
+gboolean
+up_backend_needs_poll_after_uevent (void)
+{
+	static GOnce dmi_once = G_ONCE_INIT;
+	g_once (&dmi_once, is_macbook, NULL);
+	return GPOINTER_TO_INT(dmi_once.retval);
+}
+
 static UpDevice *
 up_backend_device_new (UpBackend *backend, GUdevDevice *native)
 {
@@ -100,20 +123,13 @@ up_backend_device_new (UpBackend *backend, GUdevDevice *native)
 
 		/* are we a valid power supply */
 		device = UP_DEVICE (up_device_supply_new ());
+		g_object_set (G_OBJECT(device),
+			      "ignore-system-percentage", GPOINTER_TO_INT (is_macbook (NULL)),
+			      NULL);
 		ret = up_device_coldplug (device, backend->priv->daemon, G_OBJECT (native));
 		if (ret)
 			goto out;
 
-		/* no valid power supply object */
-		g_clear_object (&device);
-
-	} else if (g_strcmp0 (subsys, "hid") == 0) {
-
-		/* see if this is a Unifying mouse or keyboard */
-		device = UP_DEVICE (up_device_unifying_new ());
-		ret = up_device_coldplug (device, backend->priv->daemon, G_OBJECT (native));
-		if (ret)
-			goto out;
 		/* no valid power supply object */
 		g_clear_object (&device);
 
@@ -139,13 +155,6 @@ up_backend_device_new (UpBackend *backend, GUdevDevice *native)
 		g_object_unref (device);
 #endif /* HAVE_IDEVICE */
 
-		/* see if this is a CSR mouse or keyboard */
-		device = UP_DEVICE (up_device_csr_new ());
-		ret = up_device_coldplug (device, backend->priv->daemon, G_OBJECT (native));
-		if (ret)
-			goto out;
-		g_object_unref (device);
-
 		/* try to detect a HID UPS */
 		device = UP_DEVICE (up_device_hid_new ());
 		ret = up_device_coldplug (device, backend->priv->daemon, G_OBJECT (native));
@@ -159,15 +168,18 @@ up_backend_device_new (UpBackend *backend, GUdevDevice *native)
 
 		/* check input device */
 		input = up_input_new ();
-		ret = up_input_coldplug (input, backend->priv->daemon, native);
+		ret = up_input_coldplug (input, native);
 		if (ret) {
 			/* we now have a lid */
 			up_daemon_set_lid_is_present (backend->priv->daemon, TRUE);
+			g_signal_connect (G_OBJECT (input), "switch-changed",
+					  G_CALLBACK (input_switch_changed_cb), backend);
+			up_daemon_set_lid_is_closed (backend->priv->daemon,
+						     up_input_get_switch_value (input));
 
-			/* not a power device */
+			/* not a power device, add it to the managed devices
+			 * and don't return a power device */
 			up_device_list_insert (backend->priv->managed_devices, G_OBJECT (native), G_OBJECT (input));
-
-			/* no valid input object */
 			device = NULL;
 		}
 		g_object_unref (input);
@@ -276,28 +288,6 @@ up_backend_uevent_signal_handler_cb (GUdevClient *client, const gchar *action,
 	} else {
 		g_debug ("unhandled action '%s' on %s", action, g_udev_device_get_sysfs_path (device));
 	}
-}
-
-static gpointer
-is_macbook (gpointer data)
-{
-	char *product;
-	gboolean ret = FALSE;
-
-	product = sysfs_get_string ("/sys/devices/virtual/dmi/id/", "product_name");
-	if (product == NULL)
-		return GINT_TO_POINTER(ret);
-	ret = g_str_has_prefix (product, "MacBook");
-	g_free (product);
-	return GINT_TO_POINTER(ret);
-}
-
-gboolean
-up_backend_needs_poll_after_uevent (void)
-{
-	static GOnce dmi_once = G_ONCE_INIT;
-	g_once (&dmi_once, is_macbook, NULL);
-	return GPOINTER_TO_INT(dmi_once.retval);
 }
 
 static gboolean
@@ -501,8 +491,8 @@ up_backend_coldplug (UpBackend *backend, UpDaemon *daemon)
 	GList *devices;
 	GList *l;
 	guint i;
-	const gchar *subsystems_wup[] = {"power_supply", "usb", "usbmisc", "tty", "input", "hid", NULL};
-	const gchar *subsystems[] = {"power_supply", "usb", "usbmisc", "input", "hid", NULL};
+	const gchar *subsystems_wup[] = {"power_supply", "usb", "usbmisc", "tty", "input", NULL};
+	const gchar *subsystems[] = {"power_supply", "usb", "usbmisc", "input", NULL};
 
 	backend->priv->daemon = g_object_ref (daemon);
 	backend->priv->device_list = up_daemon_get_device_list (daemon);
@@ -658,28 +648,32 @@ up_backend_take_action (UpBackend *backend)
 /**
  * up_backend_inhibitor_lock_take:
  * @backend: The %UpBackend class instance
+ * @reason: Why the inhibitor lock is taken
+ * @mode: The mode of the lock ('delay' or 'block')
  *
- * Acquire a sleep 'delay lock' via systemd's logind that will
- * inhibit going to sleep until the lock is released again via
- * up_backend_inhibitor_lock_release().
- * Does nothing if the lock was already acquired.
+ * Acquire a sleep inhibitor lock via systemd's logind that will
+ * inhibit going to sleep until the lock is released again by
+ * closing the file descriptor.
  */
-static void
-up_backend_inhibitor_lock_take (UpBackend *backend)
+int
+up_backend_inhibitor_lock_take (UpBackend  *backend,
+                                const char *reason,
+                                const char *mode)
 {
 	GVariant *out, *input;
 	GUnixFDList *fds = NULL;
+	int fd;
 	GError *error = NULL;
 
-	if (backend->priv->logind_inhibitor_fd > -1) {
-		return;
-	}
+	g_return_val_if_fail (reason != NULL, -1);
+	g_return_val_if_fail (mode != NULL, -1);
+	g_return_val_if_fail (g_str_equal (mode, "delay") || g_str_equal (mode, "block"), -1);
 
 	input = g_variant_new ("(ssss)",
-			       "sleep",                /* what */
-			       "UPower",               /* who */
-			       "Pause device polling", /* why */
-			       "delay");               /* mode */
+			       "sleep",  /* what */
+			       "UPower", /* who */
+			       reason,   /* why */
+			       mode);    /* mode */
 
 	out = g_dbus_proxy_call_with_unix_fd_list_sync (backend->priv->logind_proxy,
 							"Inhibit",
@@ -694,41 +688,24 @@ up_backend_inhibitor_lock_take (UpBackend *backend)
 		g_warning ("Could not acquire inhibitor lock: %s",
 			   error ? error->message : "Unknown reason");
 		g_clear_error (&error);
-		return;
+		return -1;
 	}
 
 	if (g_unix_fd_list_get_length (fds) != 1) {
 		g_warning ("Unexpected values returned by logind's 'Inhibit'");
 		g_variant_unref (out);
 		g_object_unref (fds);
-		return;
+		return -1;
 	}
 
-	backend->priv->logind_inhibitor_fd = g_unix_fd_list_get (fds, 0, NULL);
+	fd = g_unix_fd_list_get (fds, 0, NULL);
+
 	g_variant_unref (out);
 	g_object_unref (fds);
 
-	g_debug ("Acquired inhibitor lock (%i)", backend->priv->logind_inhibitor_fd);
-}
+	g_debug ("Acquired inhibitor lock (%i, %s)", fd, mode);
 
-/**
- * up_backend_inhibitor_lock_release:
- * @backend: The %UpBackend class instance
- *
- * Releases a previously acquired inhibitor lock or does nothing
- * if no lock is held;
- */
-static void
-up_backend_inhibitor_lock_release (UpBackend *backend)
-{
-	if (backend->priv->logind_inhibitor_fd == -1) {
-		return;
-	}
-
-	close (backend->priv->logind_inhibitor_fd);
-	backend->priv->logind_inhibitor_fd = -1;
-
-	g_debug ("Released inhibitor lock");
+	return fd;
 }
 
 /**
@@ -764,11 +741,15 @@ up_backend_prepare_for_sleep (GDBusConnection *connection,
 
 	if (will_sleep) {
 		up_daemon_pause_poll (backend->priv->daemon);
-		up_backend_inhibitor_lock_release (backend);
+		if (backend->priv->logind_delay_inhibitor_fd > 0) {
+			close (backend->priv->logind_delay_inhibitor_fd);
+			backend->priv->logind_delay_inhibitor_fd = 0;
+		}
 		return;
 	}
 
-	up_backend_inhibitor_lock_take (backend);
+	if (backend->priv->logind_delay_inhibitor_fd < 0)
+		backend->priv->logind_delay_inhibitor_fd = up_backend_inhibitor_lock_take (backend, "Pause device polling", "delay");
 
 	/* we are waking up, lets refresh all battery devices */
 	g_debug ("Woke up from sleep; about to refresh devices");
@@ -835,9 +816,9 @@ up_backend_init (UpBackend *backend)
 						       backend,
 						       NULL);
 	backend->priv->logind_sleep_id = sleep_id;
-	backend->priv->logind_inhibitor_fd = -1;
+	backend->priv->logind_delay_inhibitor_fd = -1;
 
-	up_backend_inhibitor_lock_take (backend);
+	backend->priv->logind_delay_inhibitor_fd = up_backend_inhibitor_lock_take (backend, "Pause device polling", "delay");
 }
 
 static void
@@ -865,7 +846,8 @@ up_backend_finalize (GObject *object)
 	g_dbus_connection_signal_unsubscribe (bus,
 					      backend->priv->logind_sleep_id);
 
-	up_backend_inhibitor_lock_release (backend);
+	if (backend->priv->logind_delay_inhibitor_fd >= 0)
+		close (backend->priv->logind_delay_inhibitor_fd);
 
 	g_clear_object (&backend->priv->logind_proxy);
 
