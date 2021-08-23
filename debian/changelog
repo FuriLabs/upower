@@ -1,11 +1,22 @@
-upower (0.99.13-1) UNRELEASED; urgency=medium
+upower (0.99.13-1) unstable; urgency=medium
 
   * New upstream version 0.99.13
   * Use DEP-14 branch names
   * Update debian/watch.
     Thanks to Ansgar Burchardt
+  * Bump Build-Depends on libgudev-1.0-dev to (>= 235)
+  * Drop Build-Depends on libusb-1.0-0-dev, no longer needed
+  * Remove obsolete debian/upower.maintscript
+  * Set upstream metadata fields: Bug-Submit, Bug-Database, Repository,
+    Repository-Browse
+  * Bump Standards-Version to 4.6.0
+  * Bump debhelper-compat to 13
+  * Add python3-packaging to upstream-system test.
+    Required by src/linux/integration-test.
+  * Use https in debian/copyright
+  * Set Rules-Requires-Root: no
 
- -- Michael Biebl <biebl@debian.org>  Sun, 22 Aug 2021 16:57:17 +0200
+ -- Michael Biebl <biebl@debian.org>  Mon, 23 Aug 2021 11:03:33 +0200
 
 upower (0.99.11-2) unstable; urgency=medium
 
@@ -475,7 +486,7 @@ upower (0.9.14-1) unstable; urgency=low
 
 upower (0.9.13-1) unstable; urgency=low
 
-  * New upstream release. 
+  * New upstream release.
     - Modernize build system.
     - Update for the g_unix_signal_add_full() ABI break of glib 2.29.90.
     - Hardcode wacom battery devices as not power-supply devices.
@@ -825,7 +836,7 @@ upower (0.9.0+git20100216.72bb2-1) experimental; urgency=low
 devicekit-power (014-3) unstable; urgency=low
 
   * Add 02-dkpclient-singleton.patch: Make DkpClient a singleton to avoid some
-    weird race conditions. Patch taken from upstream git. (Closes: #567021, 
+    weird race conditions. Patch taken from upstream git. (Closes: #567021,
     LP: #425411)
 
  -- Martin Pitt <mpitt@debian.org>  Tue, 26 Jan 2010 20:26:03 +0100
