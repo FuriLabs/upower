@@ -2,4 +2,4 @@
 set -e
 
 # succeeding test must not write anything to stderr, as per DEP-8
-src/linux/integration-test -v 2>&1
+src/linux/integration-test.py -v 2>&1
