@@ -1,0 +1,38 @@
+UPower Release Notes
+
+1. Write NEWS entries for UPower in the same format as usual.
+
+git shortlog UPOWER_0_99_7.. | grep -i -v trivial | grep -v Merge > NEWS.new
+
+Version 0.99.8
+~~~~~~~~~~~~~~
+Released: 2017-xx-xx
+
+New Features:
+Bugfixes:
+
+2. Commit changes to git:
+
+git commit -a -m "Released UPower 0.99.8"
+git tag -s -f -m "Released UPower 0.99.8" UPOWER_0_99_8
+<wait>
+git push --tags
+git push
+
+3. Generate the tarball:
+
+meson dist
+
+4. Upload tarball:
+
+scp *.tar.* hughsient@annarchy.freedesktop.org:/srv/upower.freedesktop.org/www/releases/
+
+5. Do post release version bump in configure.ac
+
+6. Commit changes:
+
+git commit -a -m "trivial: post release version bump"
+git push
+
+7. Send an email to devkit-devel@lists.freedesktop.org
+

@@ -19,9 +19,7 @@
  *
  */
 
-#ifdef HAVE_CONFIG_H
-#  include "config.h"
-#endif
+#include "config.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,9 +30,7 @@
 #include <glib/gi18n-lib.h>
 #include <locale.h>
 
-#include "up-client.h"
-#include "up-device.h"
-#include "up-wakeups.h"
+#include "upower.h"
 
 static GMainLoop *loop;
 static gboolean opt_monitor_detail = FALSE;

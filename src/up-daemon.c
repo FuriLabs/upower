@@ -19,9 +19,7 @@
  *
  */
 
-#ifdef HAVE_CONFIG_H
-#  include "config.h"
-#endif
+#include "config.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -637,6 +635,11 @@ up_daemon_set_warning_level (UpDaemon *daemon, UpDeviceLevel warning_level)
 		if (daemon->priv->action_timeout_id > 0) {
 			g_debug ("Removing timeout as action level changed");
 			g_source_remove (daemon->priv->action_timeout_id);
+		}
+
+		if (daemon->priv->critical_action_lock_fd >= 0) {
+			close (daemon->priv->critical_action_lock_fd);
+			daemon->priv->critical_action_lock_fd = -1;
 		}
 	}
 }

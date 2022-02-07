@@ -21,9 +21,7 @@
  *
  */
 
-#ifdef HAVE_CONFIG_H
-#  include "config.h"
-#endif
+#include "config.h"
 
 #include <string.h>
 #include <math.h>
@@ -87,6 +85,7 @@ struct UpDeviceHidPrivate
 {
 	guint			 poll_timer_id;
 	int			 fd;
+	gboolean		 fake_device;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (UpDeviceHid, up_device_hid, UP_TYPE_DEVICE)
@@ -305,7 +304,6 @@ up_device_hid_coldplug (UpDevice *device)
 	UpDeviceHid *hid = UP_DEVICE_HID (device);
 	GUdevDevice *native;
 	gboolean ret = FALSE;
-	gboolean fake_device;
 	const gchar *device_file;
 	const gchar *type;
 	const gchar *vendor;
@@ -323,18 +321,18 @@ up_device_hid_coldplug (UpDevice *device)
 		goto out;
 	}
 
-	/* connect to the device */
-	g_debug ("using device: %s", device_file);
-	hid->priv->fd = open (device_file, O_RDONLY | O_NONBLOCK);
-	if (hid->priv->fd < 0) {
-		g_debug ("cannot open device file %s", device_file);
-		goto out;
-	}
-
 	/* first check that we are an UPS */
-	fake_device = g_udev_device_has_property (native, "UPOWER_FAKE_DEVICE");
-	if (!fake_device)
+	hid->priv->fake_device = g_udev_device_has_property (native, "UPOWER_FAKE_DEVICE");
+	if (!hid->priv->fake_device)
 	{
+		/* connect to the device */
+		g_debug ("using device: %s", device_file);
+		hid->priv->fd = open (device_file, O_RDONLY | O_NONBLOCK);
+		if (hid->priv->fd < 0) {
+			g_debug ("cannot open device file %s", device_file);
+			goto out;
+		}
+
 		ret = up_device_hid_is_ups (hid);
 		if (!ret) {
 			g_debug ("not a HID device: %s", device_file);
@@ -359,7 +357,7 @@ up_device_hid_coldplug (UpDevice *device)
 		      NULL);
 
 	/* coldplug everything */
-	if (fake_device)
+	if (hid->priv->fake_device)
 	{
 		ret = TRUE;
 		if (g_udev_device_get_property_as_boolean (native, "UPOWER_FAKE_HID_CHARGING"))
@@ -397,6 +395,9 @@ up_device_hid_refresh (UpDevice *device)
 	int rd;
 	UpDeviceHid *hid = UP_DEVICE_HID (device);
 
+	if (hid->priv->fake_device)
+		goto update_time;
+
 	/* read any data */
 	rd = read (hid->priv->fd, ev, sizeof (ev));
 
@@ -425,6 +426,7 @@ up_device_hid_refresh (UpDevice *device)
 	/* fix up device states */
 	up_device_hid_fixup_state (device);
 
+update_time:
 	/* reset time */
 	g_object_set (device, "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC, NULL);
 out:
