@@ -155,32 +155,6 @@ libupower-glib.so.3 libupower-glib3 #MINVER#
  (optional)up_exported_device_set_warning_level@Base 0.99.4
  (optional)up_exported_device_skeleton_get_type@Base 0.99.4
  (optional)up_exported_device_skeleton_new@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_brightness_finish@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_brightness_sync@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_max_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_max_brightness_finish@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_get_max_brightness_sync@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_set_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_set_brightness_finish@Base 0.99.4
- (optional)up_exported_kbd_backlight_call_set_brightness_sync@Base 0.99.4
- (optional)up_exported_kbd_backlight_complete_get_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_complete_get_max_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_complete_set_brightness@Base 0.99.4
- (optional)up_exported_kbd_backlight_emit_brightness_changed@Base 0.99.4
- (optional)up_exported_kbd_backlight_emit_brightness_changed_with_source@Base 0.99.5
- (optional)up_exported_kbd_backlight_get_type@Base 0.99.4
- (optional)up_exported_kbd_backlight_interface_info@Base 0.99.4
- (optional)up_exported_kbd_backlight_override_properties@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_get_type@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new_finish@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new_for_bus@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new_for_bus_finish@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new_for_bus_sync@Base 0.99.4
- (optional)up_exported_kbd_backlight_proxy_new_sync@Base 0.99.4
- (optional)up_exported_kbd_backlight_skeleton_get_type@Base 0.99.4
- (optional)up_exported_kbd_backlight_skeleton_new@Base 0.99.4
  (optional)up_exported_wakeups_call_get_data@Base 0.99.4
  (optional)up_exported_wakeups_call_get_data_finish@Base 0.99.4
  (optional)up_exported_wakeups_call_get_data_sync@Base 0.99.4
