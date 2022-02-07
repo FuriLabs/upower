@@ -1,8 +1,14 @@
-upower (0.99.14-1) UNRELEASED; urgency=medium
+upower (0.99.14-1) unstable; urgency=medium
 
   * New upstream version 0.99.14
+  * Switch to Meson build system
+  * Cherry-pick Meson fixes from upstream
+  * Update symbols file for libupower-glib3
+  * Drop up_exported_kbd_backlight_* symbols
+  * Extend upower-doc description a bit
+  * Fix upstream-system autopkgtest
 
- -- Michael Biebl <biebl@debian.org>  Mon, 07 Feb 2022 19:19:06 +0100
+ -- Michael Biebl <biebl@debian.org>  Mon, 07 Feb 2022 20:47:39 +0100
 
 upower (0.99.13-1) unstable; urgency=medium
 
