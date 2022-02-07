@@ -1,0 +1,23 @@
+From: Benjamin Berg <bberg@redhat.com>
+Date: Mon, 7 Feb 2022 15:56:48 +0100
+Subject: meson: Return a disabler if xsltproc is not found
+
+Fixes: #170
+(cherry picked from commit da05dd4b81d92bf5600ef768e8b26f6b1db3a62d)
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 2d9b9c0..2f2dfbe 100644
+--- a/meson.build
++++ b/meson.build
+@@ -47,7 +47,7 @@ gio_dep = dependency('gio-2.0', version: '>=' + glib_min_version)
+ gio_unix_dep = dependency('gio-unix-2.0', version: '>=' + glib_min_version)
+ m_dep = cc.find_library('m', required: true)
+ 
+-xsltproc = find_program('xsltproc', required: get_option('gtk-doc') or get_option('man'))
++xsltproc = find_program('xsltproc', disabler: true, required: get_option('gtk-doc') or get_option('man'))
+ 
+ # Resolve OS backend
+ os_backend = get_option('os_backend')
