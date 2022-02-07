@@ -1,0 +1,24 @@
+From: "Jan Alexander Steffens (heftig)" <heftig@archlinux.org>
+Date: Sat, 5 Feb 2022 02:26:48 +0000
+Subject: build: Fix default udevrulesdir
+
+We need to append 'rules.d' to the udev_dir.
+
+(cherry picked from commit 8eb8ab1056e03b68634098b754c89c5a99f33c5c)
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index f87de19..3858cbe 100644
+--- a/meson.build
++++ b/meson.build
+@@ -90,7 +90,7 @@ endif
+ udevrulesdir = get_option('udevrulesdir')
+ if udevrulesdir == 'auto'
+     udev_dep = dependency('udev', required: true)
+-    udevrulesdir = udev_dep.get_pkgconfig_variable('udev_dir')
++    udevrulesdir = udev_dep.get_pkgconfig_variable('udev_dir') / 'rules.d'
+ endif
+ 
+ dbusdir = get_option('datadir') / 'dbus-1'
