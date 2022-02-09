@@ -1,5 +1,5 @@
 project('upower', 'c',
-    version: '0.99.14',
+    version: '0.99.15',
     license: 'GPLv2+',
     default_options: [
         'buildtype=debugoptimized',
@@ -45,8 +45,9 @@ glib_dep = dependency('glib-2.0', version: '>=' + glib_min_version)
 gobject_dep = dependency('gobject-2.0', version: '>=' + glib_min_version)
 gio_dep = dependency('gio-2.0', version: '>=' + glib_min_version)
 gio_unix_dep = dependency('gio-unix-2.0', version: '>=' + glib_min_version)
+m_dep = cc.find_library('m', required: true)
 
-xsltproc = find_program('xsltproc', required: get_option('gtk-doc') or get_option('man'))
+xsltproc = find_program('xsltproc', disabler: true, required: get_option('gtk-doc') or get_option('man'))
 
 # Resolve OS backend
 os_backend = get_option('os_backend')
@@ -90,7 +91,7 @@ endif
 udevrulesdir = get_option('udevrulesdir')
 if udevrulesdir == 'auto'
     udev_dep = dependency('udev', required: true)
-    udevrulesdir = udev_dep.get_pkgconfig_variable('udev_dir')
+    udevrulesdir = udev_dep.get_pkgconfig_variable('udev_dir') / 'rules.d'
 endif
 
 dbusdir = get_option('datadir') / 'dbus-1'
