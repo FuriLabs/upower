@@ -1,3 +1,9 @@
+upower (0.99.15-1) UNRELEASED; urgency=medium
+
+  * New upstream version 0.99.15
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 09 Feb 2022 18:06:22 +0100
+
 upower (0.99.14-2) unstable; urgency=medium
 
   * Cherry-pick more build related fixes from upstream
