@@ -1,4 +1,0 @@
-0001-build-Fix-default-udevrulesdir.patch
-0002-build-Fix-version-macros.patch
-0003-build-Fix-missing-libm-link-on-some-platforms.patch
-0004-meson-Return-a-disabler-if-xsltproc-is-not-found.patch
