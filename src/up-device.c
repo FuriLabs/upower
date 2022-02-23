@@ -40,6 +40,7 @@ struct UpDevicePrivate
 	UpHistory		*history;
 	GObject			*native;
 	gboolean		 has_ever_refresh;
+	gboolean                 is_display_device;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (UpDevice, up_device, UP_TYPE_EXPORTED_DEVICE_SKELETON)
@@ -60,6 +61,9 @@ update_warning_level (UpDevice *device)
 {
 	UpDeviceLevel warning_level, battery_level;
 	UpExportedDevice *skeleton = UP_EXPORTED_DEVICE (device);
+
+	if (device->priv->is_display_device)
+		return;
 
 	/* If the battery level is available, and is critical,
 	 * we need to fallback to calculations to get the warning
@@ -611,6 +615,7 @@ up_device_register_display_device (UpDevice *device,
 	g_return_val_if_fail (UP_IS_DEVICE (device), FALSE);
 
 	device->priv->daemon = g_object_ref (daemon);
+	device->priv->is_display_device = TRUE;
 	object_path = g_build_filename (UP_DEVICES_DBUS_PATH, "DisplayDevice", NULL);
 	up_device_export_skeleton (device, object_path);
 	g_free (object_path);
