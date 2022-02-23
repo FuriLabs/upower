@@ -1,9 +1,10 @@
-upower (0.99.16-1) UNRELEASED; urgency=medium
+upower (0.99.16-1) unstable; urgency=medium
 
   * New upstream version 0.99.16
     - Silence unnecessary udev event warnings (Closes: #989512)
+  * Enable all hardening build flags
 
- -- Michael Biebl <biebl@debian.org>  Wed, 23 Feb 2022 19:03:31 +0100
+ -- Michael Biebl <biebl@debian.org>  Wed, 23 Feb 2022 20:48:18 +0100
 
 upower (0.99.15-1) unstable; urgency=medium
 
