@@ -46,9 +46,6 @@ struct UpDaemonPrivate
 	GHashTable		*idle_signals;
 	int			 critical_action_lock_fd;
 
-	/* Properties */
-	UpDeviceLevel		 warning_level;
-
 	/* Display battery properties */
 	UpDevice		*display_device;
 	UpDeviceKind		 kind;
@@ -72,7 +69,8 @@ struct UpDaemonPrivate
 
 static void	up_daemon_finalize		(GObject	*object);
 static gboolean	up_daemon_get_on_battery_local	(UpDaemon	*daemon);
-static gboolean	up_daemon_get_warning_level_local(UpDaemon	*daemon);
+static UpDeviceLevel up_daemon_get_warning_level_local(UpDaemon	*daemon);
+static void	up_daemon_update_warning_level	(UpDaemon	*daemon);
 static gboolean	up_daemon_get_on_ac_local 	(UpDaemon	*daemon);
 
 G_DEFINE_TYPE_WITH_PRIVATE (UpDaemon, up_daemon, UP_TYPE_EXPORTED_DAEMON_SKELETON)
@@ -300,7 +298,7 @@ out:
  *
  * As soon as _all_ batteries are low, this is true
  **/
-static gboolean
+static UpDeviceLevel
 up_daemon_get_warning_level_local (UpDaemon *daemon)
 {
 	up_daemon_update_display_battery (daemon);
@@ -478,8 +476,6 @@ up_daemon_startup (UpDaemon *daemon,
 		   GDBusConnection *connection)
 {
 	gboolean ret;
-	gboolean on_battery;
-	UpDeviceLevel warning_level;
 	UpDaemonPrivate *priv = daemon->priv;
 
 	/* register on bus */
@@ -499,12 +495,7 @@ up_daemon_startup (UpDaemon *daemon,
 	}
 
 	/* get battery state */
-	on_battery = (up_daemon_get_on_battery_local (daemon) &&
-		      !up_daemon_get_on_ac_local (daemon));
-	warning_level = up_daemon_get_warning_level_local (daemon);
-	up_daemon_set_on_battery (daemon, on_battery);
-	up_daemon_set_warning_level (daemon, warning_level);
-
+	up_daemon_update_warning_level (daemon);
 	g_debug ("daemon now not coldplug");
 
 out:
@@ -607,20 +598,23 @@ take_action_timeout_cb (UpDaemon *daemon)
 void
 up_daemon_set_warning_level (UpDaemon *daemon, UpDeviceLevel warning_level)
 {
-	UpDaemonPrivate *priv = daemon->priv;
+	UpDeviceLevel old_level;
 
-	if (priv->warning_level == warning_level)
+	g_object_get (G_OBJECT (daemon->priv->display_device),
+		      "warning-level", &old_level,
+		      NULL);
+
+	if (old_level == warning_level)
 		return;
 
 	g_debug ("warning_level = %s", up_device_level_to_string (warning_level));
-	priv->warning_level = warning_level;
 
 	g_object_set (G_OBJECT (daemon->priv->display_device),
 		      "warning-level", warning_level,
 		      "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC,
 		      NULL);
 
-	if (daemon->priv->warning_level == UP_DEVICE_LEVEL_ACTION) {
+	if (warning_level == UP_DEVICE_LEVEL_ACTION) {
 		if (daemon->priv->action_timeout_id == 0) {
 			g_debug ("About to take action in %d seconds", UP_DAEMON_ACTION_DELAY);
 			daemon->priv->critical_action_lock_fd = up_backend_inhibitor_lock_take (daemon->priv->backend, "Execute critical action", "block");
@@ -634,7 +628,7 @@ up_daemon_set_warning_level (UpDaemon *daemon, UpDeviceLevel warning_level)
 	} else {
 		if (daemon->priv->action_timeout_id > 0) {
 			g_debug ("Removing timeout as action level changed");
-			g_source_remove (daemon->priv->action_timeout_id);
+			g_clear_handle_id (&daemon->priv->action_timeout_id, g_source_remove);
 		}
 
 		if (daemon->priv->critical_action_lock_fd >= 0) {
@@ -703,7 +697,6 @@ static void
 up_daemon_update_warning_level (UpDaemon *daemon)
 {
 	gboolean ret;
-	UpDaemonPrivate *priv = daemon->priv;
 	UpDeviceLevel warning_level;
 
 	/* Check if the on_battery and warning_level state has changed */
@@ -711,8 +704,7 @@ up_daemon_update_warning_level (UpDaemon *daemon)
 	up_daemon_set_on_battery (daemon, ret);
 
 	warning_level = up_daemon_get_warning_level_local (daemon);
-	if (warning_level != priv->warning_level)
-		up_daemon_set_warning_level (daemon, warning_level);
+	up_daemon_set_warning_level (daemon, warning_level);
 }
 
 const gchar *
@@ -1040,6 +1032,7 @@ up_daemon_device_added_cb (UpBackend *backend, GObject *native, UpDevice *device
 		g_warning ("INTERNAL STATE CORRUPT (device-added): not sending NULL, native:%p, device:%p", native, device);
 		return;
 	}
+	up_daemon_update_warning_level (daemon);
 	up_exported_daemon_emit_device_added (UP_EXPORTED_DAEMON (daemon), object_path);
 }
 
@@ -1196,8 +1189,7 @@ up_daemon_finalize (GObject *object)
 	UpDaemon *daemon = UP_DAEMON (object);
 	UpDaemonPrivate *priv = daemon->priv;
 
-	if (priv->action_timeout_id != 0)
-		g_source_remove (priv->action_timeout_id);
+	g_clear_handle_id (&priv->action_timeout_id, g_source_remove);
 
 	if (priv->critical_action_lock_fd >= 0) {
 		close (priv->critical_action_lock_fd);
