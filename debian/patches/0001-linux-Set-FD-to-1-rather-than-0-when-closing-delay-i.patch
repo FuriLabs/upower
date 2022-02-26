@@ -1,0 +1,25 @@
+From: Benjamin Berg <bberg@redhat.com>
+Date: Fri, 25 Feb 2022 10:08:19 +0100
+Subject: linux: Set FD to -1 rather than 0 when closing delay inhibitor
+
+(cherry picked from commit 7192ff481bc46a257f44fb5625cbe97361cac140)
+---
+ src/linux/up-backend.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/linux/up-backend.c b/src/linux/up-backend.c
+index e24e473..f46a88d 100644
+--- a/src/linux/up-backend.c
++++ b/src/linux/up-backend.c
+@@ -746,9 +746,9 @@ up_backend_prepare_for_sleep (GDBusConnection *connection,
+ 
+ 	if (will_sleep) {
+ 		up_daemon_pause_poll (backend->priv->daemon);
+-		if (backend->priv->logind_delay_inhibitor_fd > 0) {
++		if (backend->priv->logind_delay_inhibitor_fd >= 0) {
+ 			close (backend->priv->logind_delay_inhibitor_fd);
+-			backend->priv->logind_delay_inhibitor_fd = 0;
++			backend->priv->logind_delay_inhibitor_fd = -1;
+ 		}
+ 		return;
+ 	}

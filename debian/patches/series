@@ -1,0 +1,3 @@
+0001-linux-Set-FD-to-1-rather-than-0-when-closing-delay-i.patch
+0002-input-Fix-FD-handling-and-let-input-stream-close-it.patch
+0003-daemon-Initialize-FD-to-1-to-avoid-incorrect-close.patch

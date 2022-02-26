@@ -1,0 +1,35 @@
+From: Benjamin Berg <bberg@redhat.com>
+Date: Fri, 25 Feb 2022 10:11:01 +0100
+Subject: daemon: Initialize FD to -1 to avoid incorrect close
+
+Also add an assert that the FD is -1 when we are about to grab the
+inhibitor. Previously, we would just set the value early enough before
+trying to close the FD, overwriting the incorrect initialization.
+
+(cherry picked from commit 2f81d690148cd80909083e0390ba50fb1e431b39)
+---
+ src/up-daemon.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/up-daemon.c b/src/up-daemon.c
+index da72ffe..738af99 100644
+--- a/src/up-daemon.c
++++ b/src/up-daemon.c
+@@ -616,6 +616,8 @@ up_daemon_set_warning_level (UpDaemon *daemon, UpDeviceLevel warning_level)
+ 
+ 	if (warning_level == UP_DEVICE_LEVEL_ACTION) {
+ 		if (daemon->priv->action_timeout_id == 0) {
++			g_assert (daemon->priv->critical_action_lock_fd == -1);
++
+ 			g_debug ("About to take action in %d seconds", UP_DAEMON_ACTION_DELAY);
+ 			daemon->priv->critical_action_lock_fd = up_backend_inhibitor_lock_take (daemon->priv->backend, "Execute critical action", "block");
+ 			daemon->priv->action_timeout_id = g_timeout_add_seconds (UP_DAEMON_ACTION_DELAY,
+@@ -1120,6 +1122,8 @@ static void
+ up_daemon_init (UpDaemon *daemon)
+ {
+ 	daemon->priv = up_daemon_get_instance_private (daemon);
++
++	daemon->priv->critical_action_lock_fd = -1;
+ 	daemon->priv->config = up_config_new ();
+ 	daemon->priv->power_devices = up_device_list_new ();
+ 	daemon->priv->display_device = up_device_new ();
