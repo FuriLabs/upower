@@ -1,3 +1,9 @@
+upower (0.99.16-2) unstable; urgency=medium
+
+  * Cherry-pick FD handling fixes from upstream (Closes: #1006368)
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 26 Feb 2022 10:43:19 +0100
+
 upower (0.99.16-1) unstable; urgency=medium
 
   * New upstream version 0.99.16
