@@ -1,5 +1,5 @@
 project('upower', 'c',
-    version: '0.99.16',
+    version: '0.99.17',
     license: 'GPLv2+',
     default_options: [
         'buildtype=debugoptimized',
@@ -130,8 +130,8 @@ output += '  prefix:         ' + get_option('prefix')
 output += '  libdir:         ' + get_option('libdir')
 output += '  libexecdir:     ' + get_option('prefix') / get_option('libexecdir')
 output += '  bindir:         ' + get_option('prefix') / get_option('bindir')
-output += '  sbindir:        ' + get_option('prefix') / get_option('datadir')
-output += '  datadir:        ' + get_option('prefix') / get_option('sbindir')
+output += '  sbindir:        ' + get_option('prefix') / get_option('sbindir')
+output += '  datadir:        ' + get_option('prefix') / get_option('datadir')
 output += '  sysconfdir:     ' + get_option('sysconfdir')
 output += '  localstatedir:  ' + get_option('prefix') / get_option('localstatedir')
 output += '  historydir:     ' + historydir
