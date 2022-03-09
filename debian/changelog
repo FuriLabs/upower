@@ -1,8 +1,10 @@
-upower (0.99.17-1) UNRELEASED; urgency=medium
+upower (0.99.17-1) unstable; urgency=medium
 
   * New upstream version 0.99.17
+  * Drop patches, all applied upstream
+  * Remove unnecessary version constraints
 
- -- Michael Biebl <biebl@debian.org>  Wed, 09 Mar 2022 19:45:52 +0100
+ -- Michael Biebl <biebl@debian.org>  Wed, 09 Mar 2022 19:59:13 +0100
 
 upower (0.99.16-2) unstable; urgency=medium
 
