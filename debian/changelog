@@ -1,3 +1,9 @@
+upower (0.99.18-1) UNRELEASED; urgency=medium
+
+  * New upstream version 0.99.18
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 17 May 2022 14:55:10 +0200
+
 upower (0.99.17-1) unstable; urgency=medium
 
   * New upstream version 0.99.17
