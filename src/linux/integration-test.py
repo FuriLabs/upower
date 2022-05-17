@@ -21,10 +21,14 @@ import os
 import sys
 import dbus
 import tempfile
+import shutil
 import subprocess
 import unittest
 import time
+from output_checker import OutputChecker
 from packaging.version import parse as parse_version
+
+edir = os.path.dirname(sys.argv[0])
 
 try:
     import dbusmock
@@ -145,9 +149,8 @@ class Tests(dbusmock.DBusTestCase):
         self.testbed = UMockdev.Testbed.new()
 
         self.proxy = None
-        self.log = None
         self.daemon = None
-        self.logind = None
+        self.start_logind({'CanHybridSleep' : 'yes'})
 
     def tearDown(self):
         del self.testbed
@@ -166,19 +169,11 @@ class Tests(dbusmock.DBusTestCase):
         except:
             pass
 
-        # on failures, print daemon log
-        errors = [x[1] for x in self._outcome.errors if x[1]]
-        if errors and self.log:
-            with open(self.log.name) as f:
-                sys.stderr.write('\n-------------- daemon log: ----------------\n')
-                sys.stderr.write(f.read())
-                sys.stderr.write('------------------------------\n')
-
     #
     # Daemon control and D-BUS I/O
     #
 
-    def start_daemon(self, cfgfile=None):
+    def start_daemon(self, cfgfile=None, warns=False):
         '''Start daemon and create DBus proxy.
 
         Do this after adding the devices you want to test with. At the moment
@@ -188,21 +183,26 @@ class Tests(dbusmock.DBusTestCase):
         When done, this sets self.proxy as the Gio.DBusProxy for upowerd.
         '''
         env = os.environ.copy()
-        if cfgfile is not None:
-            env['UPOWER_CONF_FILE_NAME'] = cfgfile
-        env['G_DEBUG'] = 'fatal-criticals'
+        if not cfgfile:
+            _, cfgfile = tempfile.mkstemp(prefix='upower-cfg-')
+            self.addCleanup(os.unlink, cfgfile)
+        env['UPOWER_CONF_FILE_NAME'] = cfgfile
+        env['UPOWER_HISTORY_DIR'] = tempfile.mkdtemp(prefix='upower-history-')
+        self.addCleanup(shutil.rmtree, env['UPOWER_HISTORY_DIR'])
+        env['G_DEBUG'] = 'fatal-criticals' if warns else 'fatal-warnings'
         # note: Python doesn't propagate the setenv from Testbed.new(), so we
         # have to do that ourselves
         env['UMOCKDEV_DIR'] = self.testbed.get_root_dir()
-        self.log = tempfile.NamedTemporaryFile()
+        self.daemon_log = OutputChecker()
+
         if os.getenv('VALGRIND') != None:
             daemon_path = ['valgrind', self.daemon_path, '-v']
         else:
             daemon_path = [self.daemon_path, '-v']
         self.daemon = subprocess.Popen(daemon_path,
-                                       env=env, stdout=self.log,
+                                       env=env, stdout=self.daemon_log.fd,
                                        stderr=subprocess.STDOUT)
-
+        self.daemon_log.writer_attached()
         # wait until the daemon gets online
         timeout = 100
         while timeout > 0:
@@ -227,36 +227,71 @@ class Tests(dbusmock.DBusTestCase):
 
         if self.daemon:
             try:
-                self.daemon.kill()
+                self.daemon.terminate()
             except OSError:
                 pass
-            self.daemon.wait()
+            try:
+                self.assertEqual(self.daemon.wait(timeout=2.0), 0)
+            except TimeoutError:
+                try:
+                    self.daemon.kill()
+                except OSError:
+                    pass
+                self.assertEqual(self.daemon.wait(), 0)
+        self.daemon_log.assert_closed()
         self.daemon = None
         self.proxy = None
 
     def get_dbus_property(self, name):
         '''Get property value from daemon D-Bus interface.'''
 
-        proxy = Gio.DBusProxy.new_sync(
-            self.dbus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None, UP,
-            '/org/freedesktop/UPower', 'org.freedesktop.DBus.Properties', None)
-        return proxy.Get('(ss)', UP, name)
+        return self.dbus.call_sync(UP, '/org/freedesktop/UPower',
+                                   'org.freedesktop.DBus.Properties',
+                                   'Get', GLib.Variant('(ss)', (UP, name)),
+                                   None,
+                                   Gio.DBusCallFlags.NO_AUTO_START,
+                                   -1, None).unpack()[0]
 
     def get_dbus_display_property(self, name):
         '''Get property value from display device D-Bus interface.'''
 
-        proxy = Gio.DBusProxy.new_sync(
-            self.dbus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None, UP,
-            UP_DISPLAY_OBJECT_PATH, 'org.freedesktop.DBus.Properties', None)
-        return proxy.Get('(ss)', UP + '.Device', name)
+        return self.dbus.call_sync(UP, UP_DISPLAY_OBJECT_PATH,
+                                   'org.freedesktop.DBus.Properties',
+                                   'Get', GLib.Variant('(ss)', (UP_DEVICE, name)),
+                                   None,
+                                   Gio.DBusCallFlags.NO_AUTO_START,
+                                   -1, None).unpack()[0]
 
     def get_dbus_dev_property(self, device, name):
         '''Get property value from an upower device D-Bus path.'''
 
-        proxy = Gio.DBusProxy.new_sync(
-            self.dbus, Gio.DBusProxyFlags.DO_NOT_AUTO_START, None, UP, device,
-            'org.freedesktop.DBus.Properties', None)
-        return proxy.Get('(ss)', UP + '.Device', name)
+        return self.dbus.call_sync(UP, device,
+                                   'org.freedesktop.DBus.Properties',
+                                   'Get', GLib.Variant('(ss)', (UP_DEVICE, name)),
+                                   None,
+                                   Gio.DBusCallFlags.NO_AUTO_START,
+                                   -1, None).unpack()[0]
+
+    def get_dbus_dev_properties(self, device):
+        '''Get property values from an upower device D-Bus path.'''
+
+        return self.dbus.call_sync(UP, device,
+                                   'org.freedesktop.DBus.Properties',
+                                   'GetAll', GLib.Variant('(s)', (UP_DEVICE,)),
+                                   None,
+                                   Gio.DBusCallFlags.NO_AUTO_START,
+                                   -1, None).unpack()[0]
+
+    def assertDevs(self, expected):
+        devs = self.proxy.EnumerateDevices()
+        names = (n.split('/')[-1] for n in devs)
+
+        self.assertEqual(sorted(names), sorted(expected.keys()))
+
+        for n in names:
+            props = self.get_dbus_dev_properties(n)
+            for k, v in expected[n].items():
+                self.assertEqual(props[k], v, msg=f'Property "{k}" of "{n}" should be {v} but is {props[k]}')
 
     def start_logind(self, parameters=None):
         self.logind, self.logind_obj = self.spawn_server_template('logind',
@@ -267,13 +302,6 @@ class Tests(dbusmock.DBusTestCase):
         self.bluez, self.bluez_obj = self.spawn_server_template('bluez5',
                                                                   parameters or {},
                                                                   stdout=subprocess.PIPE)
-
-    def have_text_in_log(self, text):
-        return self.count_text_in_log(text) > 0
-
-    def count_text_in_log(self, text):
-        with open(self.log.name) as f:
-            return f.read().count(text)
 
     def assertEventually(self, condition, message=None, timeout=50, value=True):
         '''Assert that condition function eventually returns True.
@@ -408,6 +436,14 @@ class Tests(dbusmock.DBusTestCase):
         self.testbed.set_attribute(bat0, 'status', 'Charging')
         time.sleep(1)
 
+        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'State'), UP_DEVICE_STATE_CHARGING)
+
+        # We stopped polling now, so this update will *not* be read, even if
+        # we send a new uevent, as the 'online' state does not change.
+        self.testbed.uevent(ac, 'change')
+        time.sleep(2)
+        self.testbed.set_attribute(bat0, 'status', 'Discharging')
+        time.sleep(1)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'State'), UP_DEVICE_STATE_CHARGING)
 
     def test_battery_ac(self):
@@ -754,7 +790,7 @@ class Tests(dbusmock.DBusTestCase):
                                  'capacity', '110',
                                  'voltage_now', '12000000'], [])
 
-        self.start_daemon()
+        self.start_daemon(warns=True)
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 1)
         bat0_up = devs[0]
@@ -842,7 +878,7 @@ class Tests(dbusmock.DBusTestCase):
         '''UPS properties without AC'''
 
         # add a charging UPS
-        ups0 = self.testbed.add_device('usb', 'hiddev0', None, [],
+        ups0 = self.testbed.add_device('usbmisc', 'hiddev0', None, [],
                                        ['DEVNAME', 'null', 'UPOWER_VENDOR', 'APC',
                                         'UPOWER_BATTERY_TYPE', 'ups',
                                         'UPOWER_FAKE_DEVICE', '1',
@@ -893,7 +929,7 @@ class Tests(dbusmock.DBusTestCase):
         '''UPS properties with offline AC'''
 
         # add low charge UPS
-        ups0 = self.testbed.add_device('usb', 'hiddev0', None, [],
+        ups0 = self.testbed.add_device('usbmisc', 'hiddev0', None, [],
                                        ['DEVNAME', 'null', 'UPOWER_VENDOR', 'APC',
                                         'UPOWER_BATTERY_TYPE', 'ups',
                                         'UPOWER_FAKE_DEVICE', '1',
@@ -941,18 +977,17 @@ class Tests(dbusmock.DBusTestCase):
                                         'energy_now', '48000000',
                                         'voltage_now', '12000000'], [])
 
-        self.start_logind()
         self.start_daemon()
 
         self.logind_obj.EmitSignal('', 'PrepareForSleep', 'b', [True])
-        self.assertEventually(lambda: self.have_text_in_log("Poll paused"), timeout=10)
+        self.daemon_log.check_line("Polling will be paused", timeout=1)
 
         # simulate some battery drain during sleep for which we then
         # can check after we 'woke up'
         self.testbed.set_attribute(bat0, 'energy_now', '40000000')
 
         self.logind_obj.EmitSignal('', 'PrepareForSleep', 'b', [False])
-        self.assertEventually(lambda: self.have_text_in_log("Poll resumed"), timeout=10)
+        self.daemon_log.check_line("Polling will be resumed", timeout=1)
 
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 1)
@@ -982,7 +1017,6 @@ class Tests(dbusmock.DBusTestCase):
         config.write("CriticalPowerAction=Hibernate\n")
         config.close()
 
-        self.start_logind()
         self.start_daemon(cfgfile=config.name)
 
         # delay inhibitor taken
@@ -1001,8 +1035,7 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEventually(lambda: self.get_dbus_display_property('WarningLevel'), value=UP_DEVICE_LEVEL_ACTION)
         self.assertEqual(len(self.logind_obj.ListInhibitors()), 2)
 
-        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
-        self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 1)
+        self.daemon_log.check_line("About to call logind method Hibernate", timeout=UP_DAEMON_ACTION_DELAY + 0.5)
 
         # block inhibitor lock is released
         self.assertEqual(len(self.logind_obj.ListInhibitors()), 1)
@@ -1026,7 +1059,6 @@ class Tests(dbusmock.DBusTestCase):
         config.write("CriticalPowerAction=Hibernate\n")
         config.close()
 
-        self.start_logind()
         self.start_daemon(cfgfile=config.name)
 
         devs = self.proxy.EnumerateDevices()
@@ -1040,8 +1072,7 @@ class Tests(dbusmock.DBusTestCase):
         time.sleep(0.5)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_ACTION)
 
-        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
-        self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 1)
+        self.daemon_log.check_line("About to call logind method Hibernate", timeout=UP_DAEMON_ACTION_DELAY + 0.5)
 
         # simulate that battery was charged to 100% during sleep
         self.testbed.set_attribute(bat0, 'energy_now', '60000000')
@@ -1057,8 +1088,7 @@ class Tests(dbusmock.DBusTestCase):
         time.sleep(0.5)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_ACTION)
 
-        time.sleep(UP_DAEMON_ACTION_DELAY + 0.5) # wait for UP_DAEMON_ACTION_DELAY
-        self.assertEqual(self.count_text_in_log("About to call logind method Hibernate"), 2)
+        self.daemon_log.check_line("About to call logind method Hibernate", timeout=UP_DAEMON_ACTION_DELAY + 0.5)
 
         self.stop_daemon()
 
@@ -1076,14 +1106,13 @@ class Tests(dbusmock.DBusTestCase):
                                         'energy_now', '50000000',
                                         'voltage_now', '12000000'], [])
 
-        self.start_logind()
         self.start_daemon()
 
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 1)
         bat0_up = devs[0]
 
-        self.assertEventually(lambda: self.have_text_in_log(f"saving in {UP_HISTORY_SAVE_INTERVAL} seconds"), timeout=10)
+        self.daemon_log.check_line(f"saving in {UP_HISTORY_SAVE_INTERVAL} seconds", timeout=1)
 
         # simulate that battery has 1% (less than 10%)
         self.testbed.set_attribute(bat0, 'energy_now', '600000')
@@ -1092,8 +1121,8 @@ class Tests(dbusmock.DBusTestCase):
         time.sleep(0.5)
         self.assertEqual(self.get_dbus_display_property('Percentage'), 1)
 
-        self.assertEqual(self.count_text_in_log("saving to disk earlier due to low power"), 1)
-        self.assertEqual(self.count_text_in_log(f"saving in {UP_HISTORY_SAVE_INTERVAL_LOW_POWER} seconds"), 1)
+        self.daemon_log.check_line("saving to disk earlier due to low power")
+        self.daemon_log.check_line(f"saving in {UP_HISTORY_SAVE_INTERVAL_LOW_POWER} seconds")
 
         # simulate that battery was charged to 100% during sleep
         self.testbed.set_attribute(bat0, 'energy_now', '60000000')
@@ -1103,47 +1132,9 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('Percentage'), 100)
 
         # The 5 seconds were not up yet, and the shorter timeout sticks
-        self.assertEqual(self.count_text_in_log("deferring as earlier timeout is already queued"), 1)
+        self.daemon_log.check_line("deferring as earlier timeout is already queued")
 
         self.stop_daemon()
-
-    def test_no_poll_batteries(self):
-        ''' setting NoPollBatteries option should disable polling'''
-
-        self.testbed.add_device('power_supply', 'BAT0', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'Discharging',
-                                 'energy_full', '60000000',
-                                 'energy_full_design', '80000000',
-                                 'energy_now', '48000000',
-                                 'voltage_now', '12000000'], [])
-
-        config = tempfile.NamedTemporaryFile(delete=False, mode='w')
-        config.write("[UPower]\n")
-        config.write("NoPollBatteries=true\n")
-        config.close()
-
-        self.start_logind()
-        self.start_daemon(cfgfile=config.name)
-
-        devs = self.proxy.EnumerateDevices()
-        self.assertEqual(len(devs), 1)
-
-        self.logind_obj.EmitSignal('', 'PrepareForSleep', 'b', [True])
-        self.assertEventually(lambda: self.have_text_in_log("Polling will be paused"), timeout=10)
-
-        self.logind_obj.EmitSignal('', 'PrepareForSleep', 'b', [False])
-        self.assertEventually(lambda: self.have_text_in_log("Polling will be resumed"), timeout=10)
-
-        self.stop_daemon()
-
-        # Now make sure we don't have any actual polling setup for the battery
-        self.assertFalse(self.have_text_in_log("Setup poll for"))
-        self.assertFalse(self.have_text_in_log("Poll paused for"))
-        self.assertFalse(self.have_text_in_log("Poll resumed for"))
-
-        os.unlink(config.name)
 
     def test_percentage_low_icon_set(self):
         '''Without battery level, PercentageLow is limit for icon change'''
@@ -1264,7 +1255,7 @@ class Tests(dbusmock.DBusTestCase):
 
         mb = self._add_bt_mouse()
 
-        self.start_daemon()
+        self.start_daemon(warns=True)
         devs_before = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs_before), 1)
 
@@ -1298,7 +1289,7 @@ class Tests(dbusmock.DBusTestCase):
              'present', '1',
              'online', '1',
              'status', 'Discharging',
-             'capacity', '30',
+             'capacity', '20',
              'model_name', 'Fancy BT mouse'],
             [])
 
@@ -1310,16 +1301,24 @@ class Tests(dbusmock.DBusTestCase):
 
         mb1_up = devs_after[0]
         self.assertEqual(self.get_dbus_dev_property(mb1_up, 'Model'), 'Fancy BT mouse')
-        self.assertEqual(self.get_dbus_dev_property(mb1_up, 'Percentage'), 30)
+        self.assertEqual(self.get_dbus_dev_property(mb1_up, 'Percentage'), 20)
         self.assertEqual(self.get_dbus_dev_property(mb1_up, 'PowerSupply'), False)
         self.stop_daemon()
 
     def test_hidpp_mouse(self):
         '''HID++ mouse battery'''
 
+        parent = self.testbed.add_device('usb',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2',
+                                         None,
+                                         [], [])
+        parent = self.testbed.add_device('hid',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009',
+                                         parent,
+                                         [], [])
         dev = self.testbed.add_device('hid',
                                       '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009/0003:046D:4101.000A',
-                                      None,
+                                      parent,
                                       [], [])
 
         parent = dev
@@ -1401,9 +1400,17 @@ class Tests(dbusmock.DBusTestCase):
     def test_hidpp_touchpad_race(self):
         '''HID++ touchpad with input node that appears later'''
 
+        parent = self.testbed.add_device('usb',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2',
+                                         None,
+                                         [], [])
+        parent = self.testbed.add_device('hid',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009',
+                                         parent,
+                                         [], [])
         dev = self.testbed.add_device('hid',
                                       '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009/0003:046D:4101.000A',
-                                      None,
+                                      parent,
                                       [], [])
 
         parent = dev
@@ -1450,9 +1457,17 @@ class Tests(dbusmock.DBusTestCase):
     def test_hidpp_touchpad(self):
         '''HID++ touchpad battery with 5 capacity levels'''
 
+        parent = self.testbed.add_device('usb',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2',
+                                         None,
+                                         [], [])
+        parent = self.testbed.add_device('hid',
+                                         '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009',
+                                         parent,
+                                         [], [])
         dev = self.testbed.add_device('hid',
                                       '/devices/pci0000:00/0000:00:14.0/usb3/3-10/3-10:1.2/0003:046D:C52B.0009/0003:046D:4101.000A',
-                                      None,
+                                      parent,
                                       [], [])
 
         parent = dev
@@ -1996,6 +2011,93 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_dev_property(devs[3], 'ChargeCycles'), -1)
         self.stop_daemon()
 
+    def test_wacom_dongle(self):
+        'Wacom tablet connected through wireless USB dongle'
+
+        self.start_daemon()
+
+        self.testbed.add_from_file(os.path.join(edir, 'tests/wacom-dongle-waiting.device'))
+        time.sleep(0.5)
+        self.assertDevs({})
+
+        self.testbed.add_from_file(os.path.join(edir, 'tests/wacom-dongle-active.device'))
+        time.sleep(0.5)
+        self.assertDevs({
+            'battery_wacom_battery_11': {
+                'NativePath': 'wacom_battery_11',
+                'Model': 'Wacom Intuos5 touch M (WL)',
+                'Type': UP_DEVICE_KIND_TABLET,
+                'PowerSupply': False,
+                'HasHistory': True,
+                'Online': False,
+                'Percentage': 19.0,
+                'IsPresent': True,
+                'State': UP_DEVICE_STATE_CHARGING,
+                'IsRechargeable': True,
+            }
+        })
+
+    def test_remove(self):
+        'Test removing when parent ID lookup stops working'
+
+        self.testbed.add_from_file(os.path.join(edir, 'tests/wacom-dongle-waiting.device'))
+        self.testbed.add_from_file(os.path.join(edir, 'tests/wacom-dongle-active.device'))
+
+        self.start_daemon()
+
+        self.assertDevs({ 'battery_wacom_battery_11': {} })
+
+        # Destroy sysfs enough to break the parent ID lookup
+        os.unlink(os.path.join(self.testbed.get_root_dir(),
+                               'sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1/1-1.1:1.0/0003:056A:0084.001F',
+                               'subsystem'))
+
+        self.get_dbus_dev_property('/org/freedesktop/UPower/devices/battery_wacom_battery_11', 'State')
+
+        # This should remove all devices that UPower tracks
+        self.testbed.uevent('/sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1/1-1.1:1.0/0003:056A:0084.001F/power_supply/wacom_battery_11',
+                            'remove')
+        self.testbed.uevent('/sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1/1-1.1:1.1/0003:056A:0084.0020/input/input125',
+                            'remove')
+        self.testbed.uevent('/sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1/1-1.1:1.1/0003:056A:0084.0020/input/input127',
+                            'remove')
+        self.testbed.uevent('/sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1/1-1.1:1.2/0003:056A:0084.0021/input/input129',
+                            'remove')
+        self.daemon_log.check_line('No devices with parent /sys/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.1 left', timeout=2)
+
+        # Ensure the object is really gone from the bus,
+        # the second case could happen if a reference is leaked.
+        self.assertDevs({})
+        with self.assertRaisesRegex(GLib.Error, 'Object does not exist at path'):
+            self.get_dbus_dev_property('/org/freedesktop/UPower/devices/battery_wacom_battery_11', 'State')
+
+        self.stop_daemon()
+
+    def test_wacom_bluetooth(self):
+        'Wacom tablet connected through wireless USB dongle'
+
+        self.start_daemon()
+
+        self.testbed.add_from_file(os.path.join(edir, 'tests/wacom-bluetooth-active.device'))
+        time.sleep(0.5)
+        self.assertDevs({
+            'battery_wacom_battery_10': {
+                'NativePath': 'wacom_battery_10',
+                'Model': 'Wacom Intuos5 touch M (WL)',
+                'Type': UP_DEVICE_KIND_TABLET,
+                'PowerSupply': False,
+                'HasHistory': True,
+                'Online': False,
+                'Percentage': 100.0,
+                'IsPresent': True,
+                # XXX: This is "Discharging" in sysfs
+                'State': UP_DEVICE_STATE_FULLY_CHARGED,
+                'IsRechargeable': True,
+            }
+        })
+
+        self.stop_daemon()
+
     #
     # libupower-glib tests (through introspection)
     #
@@ -2003,7 +2105,6 @@ class Tests(dbusmock.DBusTestCase):
     def test_lib_daemon_properties(self):
         '''library GI: daemon properties'''
 
-        self.start_logind(parameters={'CanHybridSleep': 'yes'})
         self.start_daemon()
         client = UPowerGlib.Client.new()
         self.assertRegex(client.get_daemon_version(), '^[0-9.]+$')

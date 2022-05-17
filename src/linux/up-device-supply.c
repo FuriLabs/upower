@@ -35,7 +35,6 @@
 #include "up-types.h"
 #include "up-constants.h"
 #include "up-device-supply.h"
-#include "up-backend-linux-private.h"
 
 enum {
 	PROP_0,
@@ -50,55 +49,52 @@ enum {
 /* number of old energy values to keep cached */
 #define UP_DEVICE_SUPPLY_ENERGY_OLD_LENGTH		4
 
-typedef enum {
-	REFRESH_RESULT_FAILURE = 0,
-	REFRESH_RESULT_SUCCESS = 1,
-	REFRESH_RESULT_NO_DATA
-} RefreshResult;
-
 struct UpDeviceSupplyPrivate
 {
-	guint			 poll_timer_id;
 	gboolean		 has_coldplug_values;
 	gboolean		 coldplug_units;
 	gdouble			*energy_old;
 	GTimeVal		*energy_old_timespec;
 	guint			 energy_old_first;
 	gdouble			 rate_old;
-	guint			 unknown_retries;
-	gint64			 last_unknown_retry;
+	gint64			 fast_repoll_until;
 	gboolean		 disable_battery_poll; /* from configuration */
-	gboolean		 is_power_supply;
 	gboolean		 shown_invalid_voltage_warning;
 	gboolean		 ignore_system_percentage;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (UpDeviceSupply, up_device_supply, UP_TYPE_DEVICE)
 
-static gboolean		 up_device_supply_refresh	 	(UpDevice *device);
-static void		 up_device_supply_setup_unknown_poll	(UpDevice      *device,
-								 UpDeviceState  state);
+static gboolean		 up_device_supply_refresh	 	(UpDevice *device,
+								 UpRefreshReason reason);
+static void		 up_device_supply_update_poll_frequency	(UpDevice       *device,
+								 UpDeviceState   state,
+								 UpRefreshReason reason);
 static UpDeviceKind	 up_device_supply_guess_type		(GUdevDevice *native,
 								 const char *native_path);
 
-static RefreshResult
-up_device_supply_refresh_line_power (UpDeviceSupply *supply)
+static gboolean
+up_device_supply_refresh_line_power (UpDeviceSupply *supply,
+				     UpRefreshReason reason)
 {
 	UpDevice *device = UP_DEVICE (supply);
 	GUdevDevice *native;
-
-	/* is providing power to computer? */
-	g_object_set (device,
-		      "power-supply", supply->priv->is_power_supply,
-		      NULL);
+	gboolean online_old, online_new;
 
 	/* get new AC value */
 	native = G_UDEV_DEVICE (up_device_get_native (device));
-	g_object_set (device,
-		      "online", g_udev_device_get_sysfs_attr_as_int_uncached (native, "online"),
-		      NULL);
 
-	return REFRESH_RESULT_SUCCESS;
+	g_object_get (device,
+		      "online", &online_old,
+		      NULL);
+	online_new = g_udev_device_get_sysfs_attr_as_int_uncached (native, "online");
+	/* Avoid notification if the value did not change. */
+	if (online_old != online_new)
+		g_object_set (device,
+			      "online", online_new,
+			      NULL);
+
+	return TRUE;
 }
 
 /**
@@ -126,7 +122,6 @@ up_device_supply_reset_values (UpDeviceSupply *supply)
 		      "model", NULL,
 		      "serial", NULL,
 		      "update-time", (guint64) 0,
-		      "power-supply", FALSE,
 		      "online", FALSE,
 		      "energy", (gdouble) 0.0,
 		      "is-present", FALSE,
@@ -436,7 +431,7 @@ up_device_supply_make_safe_string (gchar *text)
 				text[idx] = text[i];
 			idx++;
 		} else {
-			g_debug ("invalid char '%c'", text[i]);
+			g_debug ("invalid char: 0x%02X", text[i]);
 		}
 	}
 
@@ -545,9 +540,9 @@ sysfs_get_capacity_level (GUdevDevice   *native,
 	return ret;
 }
 
-static RefreshResult
+static gboolean
 up_device_supply_refresh_battery (UpDeviceSupply *supply,
-				  UpDeviceState  *out_state)
+				  UpRefreshReason reason)
 {
 	gchar *technology_native = NULL;
 	gdouble voltage_design;
@@ -590,7 +585,6 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 	g_object_set (device, "is-present", is_present, NULL);
 	if (!is_present) {
 		up_device_supply_reset_values (supply);
-		g_object_get (device, "state", out_state, NULL);
 		goto out;
 	}
 
@@ -605,10 +599,6 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 	/* initial values */
 	if (!supply->priv->has_coldplug_values ||
 	    up_device_supply_units_changed (supply, native)) {
-
-		g_object_set (device,
-			      "power-supply", supply->priv->is_power_supply,
-			      NULL);
 
 		/* the ACPI spec is bad at defining battery type constants */
 		technology_native = up_device_supply_get_string (native, "technology");
@@ -752,7 +742,7 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 
 	/* the battery isn't charging or discharging, it's just
 	 * sitting there half full doing nothing: try to guess a state */
-	if (state == UP_DEVICE_STATE_UNKNOWN && supply->priv->is_power_supply) {
+	if (state == UP_DEVICE_STATE_UNKNOWN) {
 		daemon = up_device_get_daemon (device);
 
 		/* If we have any online AC, assume charging, otherwise
@@ -861,8 +851,6 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 		supply->priv->energy_old_first = 0;
 	}
 
-	*out_state = state;
-
 	g_object_set (device,
 		      "energy", energy,
 		      "energy-full", energy_full,
@@ -878,89 +866,27 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 		      NULL);
 
 	/* Setup unknown poll again if needed */
-	up_device_supply_setup_unknown_poll (device, state);
+	up_device_supply_update_poll_frequency (device, state, reason);
 
 out:
 	g_free (technology_native);
 	g_free (manufacturer);
 	g_free (model_name);
 	g_free (serial_number);
-	return REFRESH_RESULT_SUCCESS;
+	return TRUE;
 }
 
-static GUdevDevice *
-up_device_supply_get_sibling_with_subsystem (GUdevDevice *device,
-					     const char *subsystem)
-{
-	GUdevDevice *parent;
-	GUdevClient *client;
-	GUdevDevice *sibling;
-	const char * class[] = { NULL, NULL };
-	const char *parent_path;
-	GList *devices, *l;
-
-	g_return_val_if_fail (device != NULL, NULL);
-	g_return_val_if_fail (subsystem != NULL, NULL);
-
-	parent = g_udev_device_get_parent (device);
-	if (!parent)
-		return NULL;
-	parent_path = g_udev_device_get_sysfs_path (parent);
-
-	sibling = NULL;
-	class[0] = subsystem;
-	client = g_udev_client_new (class);
-	devices = g_udev_client_query_by_subsystem (client, subsystem);
-	for (l = devices; l != NULL; l = l->next) {
-		GUdevDevice *d = l->data;
-		GUdevDevice *p;
-		const char *p_path;
-
-		p = g_udev_device_get_parent (d);
-		if (!p)
-			continue;
-		p_path = g_udev_device_get_sysfs_path (p);
-		if (g_strcmp0 (p_path, parent_path) == 0) {
-			if (sibling != NULL &&
-			    g_udev_device_get_property_as_boolean (d, "ID_INPUT_KEYBOARD")) {
-				g_clear_object (&sibling);
-			}
-			if (sibling == NULL)
-				sibling = g_object_ref (d);
-		}
-
-		g_object_unref (p);
-	}
-
-	g_list_free_full (devices, (GDestroyNotify) g_object_unref);
-	g_object_unref (client);
-	g_object_unref (parent);
-
-	return sibling;
-}
-
-static RefreshResult
+static gboolean
 up_device_supply_refresh_device (UpDeviceSupply *supply,
-				 UpDeviceState  *out_state)
+				 UpRefreshReason reason)
 {
 	UpDeviceState state;
 	UpDevice *device = UP_DEVICE (supply);
-	const gchar *native_path;
 	GUdevDevice *native;
 	gdouble percentage = 0.0f;
 	UpDeviceLevel level = UP_DEVICE_LEVEL_NONE;
-	UpDeviceKind type;
 
 	native = G_UDEV_DEVICE (up_device_get_native (device));
-	native_path = g_udev_device_get_sysfs_path (native);
-
-	/* Try getting a more precise type again */
-	g_object_get (device, "type", &type, NULL);
-	if (type == UP_DEVICE_KIND_BATTERY) {
-		type = up_device_supply_guess_type (native, native_path);
-		if (type != UP_DEVICE_KIND_BATTERY)
-			g_object_set (device, "type", type, NULL);
-	}
 
 	/* initial values */
 	if (!supply->priv->has_coldplug_values) {
@@ -970,16 +896,6 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		/* get values which may be blank */
 		model_name = up_device_supply_get_string (native, "model_name");
 		serial_number = up_device_supply_get_string (native, "serial_number");
-		if (model_name == NULL && serial_number == NULL) {
-			GUdevDevice *sibling;
-
-			sibling = up_device_supply_get_sibling_with_subsystem (native, "input");
-			if (sibling != NULL) {
-				model_name = up_device_supply_get_string (sibling, "name");
-				serial_number = up_device_supply_get_string (sibling, "uniq");
-				g_object_unref (sibling);
-			}
-		}
 
 		/* some vendors fill this with binary garbage */
 		up_device_supply_make_safe_string (model_name);
@@ -992,13 +908,13 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 			      "is-rechargeable", TRUE,
 			      "has-history", TRUE,
 			      "has-statistics", TRUE,
-			      "power-supply", supply->priv->is_power_supply, /* always FALSE */
 			      NULL);
 
 		/* we only coldplug once, as these values will never change */
 		supply->priv->has_coldplug_values = TRUE;
 
 		g_free (model_name);
+		g_free (serial_number);
 	}
 
 	/* get a precise percentage */
@@ -1010,8 +926,7 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		/* Probably talking to the device over Bluetooth */
 		state = UP_DEVICE_STATE_UNKNOWN;
 		g_object_set (device, "state", state, NULL);
-		*out_state = state;
-		return REFRESH_RESULT_NO_DATA;
+		return FALSE;
 	}
 
 	state = up_device_supply_get_state (native);
@@ -1021,35 +936,85 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 	if (percentage == 100.0)
 		state = UP_DEVICE_STATE_FULLY_CHARGED;
 
-	/* reset unknown counter */
-	if (state != UP_DEVICE_STATE_UNKNOWN) {
-		g_debug ("resetting unknown timeout after %i retries", supply->priv->unknown_retries);
-		supply->priv->unknown_retries = 0;
-	}
-
 	g_object_set (device,
 		      "percentage", percentage,
 		      "battery-level", level,
 		      "state", state,
 		      NULL);
 
-	*out_state = state;
-
-	return REFRESH_RESULT_SUCCESS;
+	return TRUE;
 }
 
-static gboolean
-up_device_supply_poll_unknown_battery (UpDevice *device)
+static void
+up_device_supply_sibling_discovered (UpDevice *device,
+				     GObject  *sibling)
 {
-	UpDeviceSupply *supply = UP_DEVICE_SUPPLY (device);
+	GUdevDevice *input;
+	g_autofree char *device_type = NULL;
+	UpDeviceKind cur_type, new_type;
+	char *model_name;
+	char *serial_number;
+	int i;
+	struct {
+		const char *prop;
+		UpDeviceKind type;
+	} types[] = {
+		/* In order of type priority, we never downgrade here (loop aborts). */
+		{ "ID_INPUT_TABLET", UP_DEVICE_KIND_TABLET },
+		{ "ID_INPUT_TABLET_PAD", UP_DEVICE_KIND_TABLET },
+		{ "ID_INPUT_KEYBOARD", UP_DEVICE_KIND_KEYBOARD },
+		{ "ID_INPUT_TOUCHPAD", UP_DEVICE_KIND_TOUCHPAD },
+		{ "ID_INPUT_MOUSE", UP_DEVICE_KIND_MOUSE },
+		{ "ID_INPUT_JOYSTICK", UP_DEVICE_KIND_GAMING_INPUT },
+	};
 
-	g_debug ("Unknown state on supply %s; forcing update after %i seconds",
-		 up_device_get_object_path (device), UP_DAEMON_UNKNOWN_TIMEOUT);
+	if (!G_UDEV_IS_DEVICE (sibling))
+		return;
 
-	supply->priv->poll_timer_id = 0;
-	up_device_supply_refresh (device);
+	input = G_UDEV_DEVICE (sibling);
 
-	return FALSE;
+	/* Do not process if we already have a "good" guess for the device type. */
+	g_object_get (device, "type", &cur_type, NULL);
+	if (cur_type == UP_DEVICE_KIND_LINE_POWER)
+		return;
+
+	if (g_strcmp0 (g_udev_device_get_subsystem (input), "input") != 0)
+		return;
+
+	g_object_get (device,
+		      "model", &model_name,
+		      "serial", &serial_number,
+		      NULL);
+
+	if (model_name == NULL && serial_number == NULL) {
+		model_name = up_device_supply_get_string (input, "name");
+		serial_number = up_device_supply_get_string (input, "uniq");
+
+		up_device_supply_make_safe_string (model_name);
+		up_device_supply_make_safe_string (serial_number);
+
+		g_object_set (device,
+			      "model", model_name,
+			      "serial", serial_number,
+			      NULL);
+
+		g_free (model_name);
+		g_free (serial_number);
+	}
+
+	/* Fall back to "keyboard" if we don't find anything. */
+	new_type = UP_DEVICE_KIND_KEYBOARD;
+
+	for (i = 0; i < G_N_ELEMENTS (types); i++) {
+		if (types[i].type == cur_type ||
+		    g_udev_device_get_property_as_boolean (input, types[i].prop)) {
+			new_type = types[i].type;
+			break;
+		}
+	}
+
+	if (cur_type != new_type)
+		g_object_set (device, "type", new_type, NULL);
 }
 
 static UpDeviceKind
@@ -1069,36 +1034,26 @@ up_device_supply_guess_type (GUdevDevice *native,
 	}
 
 	if (g_ascii_strcasecmp (device_type, "battery") == 0) {
-		GUdevDevice *sibling;
+		type = UP_DEVICE_KIND_BATTERY;
 
-		sibling = up_device_supply_get_sibling_with_subsystem (native, "input");
-		if (sibling) {
-			if (g_udev_device_get_property_as_boolean (sibling, "ID_INPUT_TOUCHPAD")) {
-				type = UP_DEVICE_KIND_TOUCHPAD;
-			} else if (g_udev_device_get_property_as_boolean (sibling, "ID_INPUT_MOUSE")) {
-				type = UP_DEVICE_KIND_MOUSE;
-			} else if (g_udev_device_get_property_as_boolean (sibling, "ID_INPUT_JOYSTICK")) {
-				type = UP_DEVICE_KIND_GAMING_INPUT;
-			} else {
-				type = UP_DEVICE_KIND_KEYBOARD;
-			}
-
-			g_object_unref (sibling);
-		}
-
-		if (type == UP_DEVICE_KIND_UNKNOWN)
-			type = UP_DEVICE_KIND_BATTERY;
 	} else if (g_ascii_strcasecmp (device_type, "USB") == 0) {
 
-		/* use a heuristic to find the device type */
-		if (g_strstr_len (native_path, -1, "wacom_") != NULL) {
-			type = UP_DEVICE_KIND_TABLET;
-		} else if (g_strstr_len (native_path, -1, "ucsi-source-psy-") != NULL) {
+		/* USB supplies should have a usb_type attribute which we would
+		 * ideally decode further.
+		 *
+		 * For historic reasons, we have a heuristic for wacom tablets
+		 * that can be dropped in the future.
+		 * As of May 2022, it is expected to be fixed in kernel 5.19.
+		 * https://patchwork.kernel.org/project/linux-input/patch/20220407115406.115112-1-hadess@hadess.net/
+		 */
+		if (g_udev_device_has_sysfs_attr (native, "usb_type") &&
+		    g_udev_device_has_sysfs_attr (native, "online"))
 			type = UP_DEVICE_KIND_LINE_POWER;
-		} else {
-			g_warning ("did not recognise USB path %s, please report",
+		else if (g_strstr_len (native_path, -1, "wacom_") != NULL)
+			type = UP_DEVICE_KIND_TABLET;
+		else
+			g_warning ("USB power supply %s without usb_type property, please report",
 				   native_path);
-		}
 	} else {
 		g_warning ("did not recognise type %s, please report", device_type);
 	}
@@ -1121,7 +1076,7 @@ up_device_supply_coldplug (UpDevice *device)
 	const gchar *native_path;
 	const gchar *scope;
 	UpDeviceKind type;
-	RefreshResult ret;
+	gboolean is_power_supply;
 
 	up_device_supply_reset_values (supply);
 
@@ -1136,16 +1091,16 @@ up_device_supply_coldplug (UpDevice *device)
 	/* try to work out if the device is powering the system */
 	scope = g_udev_device_get_sysfs_attr (native, "scope");
 	if (scope != NULL && g_ascii_strcasecmp (scope, "device") == 0) {
-		supply->priv->is_power_supply = FALSE;
+		is_power_supply = FALSE;
 	} else if (scope != NULL && g_ascii_strcasecmp (scope, "system") == 0) {
-		supply->priv->is_power_supply = TRUE;
+		is_power_supply = TRUE;
 	} else {
 		g_debug ("taking a guess for power supply scope");
-		supply->priv->is_power_supply = TRUE;
+		is_power_supply = TRUE;
 	}
 
 	/* we don't use separate ACs for devices */
-	if (supply->priv->is_power_supply == FALSE &&
+	if (is_power_supply == FALSE &&
 	    !g_udev_device_has_sysfs_attr_uncached (native, "capacity") &&
 	    !g_udev_device_has_sysfs_attr_uncached (native, "capacity_level")) {
 		g_debug ("Ignoring device AC, we'll monitor the device battery");
@@ -1166,87 +1121,85 @@ up_device_supply_coldplug (UpDevice *device)
 	}
 
 	/* set the value */
-	g_object_set (device, "type", type, NULL);
+	g_object_set (device,
+		     "type", type,
+		     "power-supply", is_power_supply,
+		     NULL);
 
 	if (type != UP_DEVICE_KIND_LINE_POWER &&
 	    type != UP_DEVICE_KIND_BATTERY)
-		up_daemon_start_poll (G_OBJECT (device), (GSourceFunc) up_device_supply_refresh);
+		g_object_set (device, "poll-timeout", UP_DAEMON_SHORT_TIMEOUT, NULL);
 	else if (type == UP_DEVICE_KIND_BATTERY &&
-		 (!supply->priv->disable_battery_poll || !supply->priv->is_power_supply))
-		up_daemon_start_poll (G_OBJECT (device), (GSourceFunc) up_device_supply_refresh);
+		 (!supply->priv->disable_battery_poll || !is_power_supply))
+		g_object_set (device, "poll-timeout", UP_DAEMON_SHORT_TIMEOUT, NULL);
 
-	/* coldplug values */
-	ret = up_device_supply_refresh (device);
-	return (ret != REFRESH_RESULT_FAILURE);
+	return TRUE;
 }
 
-/**
- * up_device_supply_setup_unknown_poll:
- **/
 static void
-up_device_supply_setup_unknown_poll (UpDevice      *device,
-				     UpDeviceState  state)
+up_device_supply_update_poll_frequency (UpDevice        *device,
+					UpDeviceState    state,
+					UpRefreshReason  reason)
 {
 	UpDeviceSupply *supply = UP_DEVICE_SUPPLY (device);
 
 	if (supply->priv->disable_battery_poll)
 		return;
 
-	/* if it's unknown, poll faster than we would normally */
-	if (supply->priv->unknown_retries < UP_DAEMON_UNKNOWN_RETRIES &&
-	    (state == UP_DEVICE_STATE_UNKNOWN || up_backend_needs_poll_after_uevent ())) {
-		gint64 now;
-		supply->priv->poll_timer_id =
-			g_timeout_add_seconds (UP_DAEMON_UNKNOWN_TIMEOUT,
-					       (GSourceFunc) up_device_supply_poll_unknown_battery, supply);
-		g_source_set_name_by_id (supply->priv->poll_timer_id, "[upower] up_device_supply_poll_unknown_battery (linux)");
+	/* We start fast-polling if the reason to update was not a normal POLL
+	 * and one of the following holds true:
+	 *  1. The current stat is unknown; we hope that this is transient
+	 *     and re-poll.
+	 *  2. A change occured on a line power supply. This likely means that
+	 *     batteries switch between charging/discharging which does not
+	 *     always result in a separate uevent.
+	 *
+	 * For simplicity, we do the fast polling for a specific period of time.
+	 * If the reason to do fast-polling was an unknown state, then it would
+	 * also be reasonable to stop as soon as we got a proper state.
+	 */
+	if (reason != UP_REFRESH_POLL &&
+	    (state == UP_DEVICE_STATE_UNKNOWN ||
+	     reason == UP_REFRESH_LINE_POWER)) {
+		g_debug ("unknown_poll: setting up fast re-poll");
+		g_object_set (device, "poll-timeout", UP_DAEMON_UNKNOWN_TIMEOUT, NULL);
+		supply->priv->fast_repoll_until = g_get_monotonic_time () + UP_DAEMON_UNKNOWN_POLL_TIME * G_USEC_PER_SEC;
 
-		/* increase count, we don't want to poll at 0.5Hz forever */
-		now = g_get_monotonic_time ();
-		if (now - supply->priv->last_unknown_retry > G_USEC_PER_SEC)
-			supply->priv->unknown_retries++;
-		supply->priv->last_unknown_retry = now;
-	} else {
-		/* reset unknown counter */
-		supply->priv->unknown_retries = 0;
-	}
-}
+	} else if (supply->priv->fast_repoll_until == 0) {
+		/* Not fast-repolling, no need to check whether to stop */
 
-static void
-up_device_supply_disable_unknown_poll (UpDevice *device)
-{
-	UpDeviceSupply *supply = UP_DEVICE_SUPPLY (device);
-
-	if (supply->priv->poll_timer_id > 0) {
-		g_source_remove (supply->priv->poll_timer_id);
-		supply->priv->poll_timer_id = 0;
+	} else if (supply->priv->fast_repoll_until < g_get_monotonic_time ()) {
+		g_debug ("unknown_poll: stopping fast repoll (giving up)");
+		supply->priv->fast_repoll_until = 0;
+		g_object_set (device, "poll-timeout", UP_DAEMON_SHORT_TIMEOUT, NULL);
 	}
 }
 
 static gboolean
-up_device_supply_refresh (UpDevice *device)
+up_device_supply_refresh (UpDevice *device, UpRefreshReason reason)
 {
-	RefreshResult ret;
+	gboolean updated;
 	UpDeviceSupply *supply = UP_DEVICE_SUPPLY (device);
 	UpDeviceKind type;
-	UpDeviceState state;
+	gboolean is_power_supply = FALSE;
 
-	g_object_get (device, "type", &type, NULL);
+	g_object_get (device,
+		      "type", &type,
+		      "power-supply", &is_power_supply,
+		      NULL);
 	if (type == UP_DEVICE_KIND_LINE_POWER) {
-		ret = up_device_supply_refresh_line_power (supply);
-	} else if (type == UP_DEVICE_KIND_BATTERY &&
-		   supply->priv->is_power_supply) {
-		up_device_supply_disable_unknown_poll (device);
-		ret = up_device_supply_refresh_battery (supply, &state);
+		updated = up_device_supply_refresh_line_power (supply, reason);
+	} else if (type == UP_DEVICE_KIND_BATTERY && is_power_supply) {
+		updated = up_device_supply_refresh_battery (supply, reason);
 	} else {
-		ret = up_device_supply_refresh_device (supply, &state);
+		updated = up_device_supply_refresh_device (supply, reason);
 	}
 
 	/* reset time if we got new data */
-	if (ret == REFRESH_RESULT_SUCCESS)
+	if (updated)
 		g_object_set (device, "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC, NULL);
 
-	return (ret != REFRESH_RESULT_FAILURE);
+	return updated;
 }
 
 /**
@@ -1286,11 +1239,6 @@ up_device_supply_finalize (GObject *object)
 
 	supply = UP_DEVICE_SUPPLY (object);
 	g_return_if_fail (supply->priv != NULL);
-
-	up_daemon_stop_poll (object);
-
-	if (supply->priv->poll_timer_id > 0)
-		g_source_remove (supply->priv->poll_timer_id);
 
 	g_free (supply->priv->energy_old);
 	g_free (supply->priv->energy_old_timespec);
@@ -1347,6 +1295,7 @@ up_device_supply_class_init (UpDeviceSupplyClass *klass)
 	device_class->get_on_battery = up_device_supply_get_on_battery;
 	device_class->get_online = up_device_supply_get_online;
 	device_class->coldplug = up_device_supply_coldplug;
+	device_class->sibling_discovered = up_device_supply_sibling_discovered;
 	device_class->refresh = up_device_supply_refresh;
 
 	g_object_class_install_property (object_class, PROP_IGNORE_SYSTEM_PERCENTAGE,
@@ -1355,13 +1304,3 @@ up_device_supply_class_init (UpDeviceSupplyClass *klass)
 							       "Ignore system provided battery percentage",
 							       FALSE, G_PARAM_READWRITE));
 }
-
-/**
- * up_device_supply_new:
- **/
-UpDeviceSupply *
-up_device_supply_new (void)
-{
-	return g_object_new (UP_TYPE_DEVICE_SUPPLY, NULL);
-}
-

@@ -289,10 +289,3 @@ up_device_bluez_class_init (UpDeviceBluezClass *klass)
 
 	device_class->coldplug = up_device_bluez_coldplug;
 }
-
-UpDeviceBluez *
-up_device_bluez_new (void)
-{
-	return g_object_new (UP_TYPE_DEVICE_BLUEZ, NULL);
-}
-
