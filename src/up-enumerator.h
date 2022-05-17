@@ -1,8 +1,6 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
- * Copyright (C) 2018 Bastien Nocera <hadess@hadess.net>
- *
- * Licensed under the GNU General Public License Version 2
+ * Copyright (C) 2022 Benjamin Berg <bberg@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,14 +14,27 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
-#ifndef __UP_BACKEND_LINUX_PRIVATE_H
-#define __UP_BACKEND_LINUX_PRIVATE_H
+#pragma once
 
-#include <glib.h>
+#include <glib-object.h>
 
-gboolean up_backend_needs_poll_after_uevent (void);
+G_BEGIN_DECLS
 
-#endif /* __UP_BACKEND_LINUX_PRIVATE_H */
+#define UP_TYPE_ENUMERATOR	(up_enumerator_get_type ())
+
+G_DECLARE_DERIVABLE_TYPE (UpEnumerator, up_enumerator, UP, ENUMERATOR, GObject)
+
+struct _UpEnumeratorClass
+{
+  GObjectClass parent_class;
+
+  void (*initable_init) (UpEnumerator *self);
+};
+
+UpDaemon *up_enumerator_get_daemon (UpEnumerator *self);
+
+G_END_DECLS

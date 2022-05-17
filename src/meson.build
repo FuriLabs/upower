@@ -33,10 +33,10 @@ upowerd_private = static_library('upowerd-private',
         'up-device.c',
         'up-device-list.h',
         'up-device-list.c',
+        'up-enumerator.c',
+        'up-enumerator.h',
         'up-kbd-backlight.h',
         'up-kbd-backlight.c',
-        'up-wakeups.h',
-        'up-wakeups.c',
         'up-history.h',
         'up-history.c',
         'up-backend.h',
@@ -63,7 +63,7 @@ up_self_test = executable('up_self_test',
         'up-self-test.c',
     ],
     c_args: [
-        '-DUPOWER_CONF_PATH="@0@"'.format(meson.source_root() / 'etc' / 'UPower.conf'),
+        '-DUPOWER_CONF_PATH="@0@"'.format(meson.project_source_root() / 'etc' / 'UPower.conf'),
         '-DG_LOG_DOMAIN="UPower"',
     ],
     dependencies: upowerd_deps,
@@ -118,13 +118,13 @@ test(
 # defined here as we would have a circular dependency otherwise.
 if os_backend == 'linux' and gobject_introspection.found()
     env = environment()
-    env.prepend('top_builddir', join_paths(meson.build_root()))
-    env.prepend('LD_LIBRARY_PATH', join_paths(meson.build_root(), 'libupower-glib'))
-    env.prepend('GI_TYPELIB_PATH', join_paths(meson.build_root(), 'libupower-glib'))
+    env.prepend('top_builddir', join_paths(meson.project_build_root()))
+    env.prepend('LD_LIBRARY_PATH', join_paths(meson.project_build_root(), 'libupower-glib'))
+    env.prepend('GI_TYPELIB_PATH', join_paths(meson.project_build_root(), 'libupower-glib'))
 
     python3 = find_program('python3')
     unittest_inspector = find_program('linux/unittest_inspector.py')
-    r = run_command(unittest_inspector, files('linux/integration-test.py'))
+    r = run_command(unittest_inspector, files('linux/integration-test.py'), check: true)
     unit_tests = r.stdout().strip().split('\n')
 
     foreach ut: unit_tests

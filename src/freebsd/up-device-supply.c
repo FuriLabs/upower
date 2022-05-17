@@ -29,7 +29,9 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 #include <dev/acpica/acpiio.h>
+#endif
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -47,7 +49,7 @@
 
 G_DEFINE_TYPE (UpDeviceSupply, up_device_supply, UP_TYPE_DEVICE)
 
-static gboolean		 up_device_supply_refresh	 	(UpDevice *device);
+static gboolean		 up_device_supply_refresh	 	(UpDevice *device, UpRefreshReason reason);
 static UpDeviceTechnology	up_device_supply_convert_device_technology (const gchar *type);
 static gboolean		up_device_supply_acline_coldplug	(UpDevice *device);
 static gboolean		up_device_supply_battery_coldplug	(UpDevice *device, UpAcpiNative *native);
@@ -155,6 +157,7 @@ up_device_supply_battery_coldplug (UpDevice *device, UpAcpiNative *native)
 static gboolean
 up_device_supply_battery_set_properties (UpDevice *device, UpAcpiNative *native)
 {
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 	gint fd;
 	gdouble volt, dvolt, rate, lastfull, cap, dcap, lcap, capacity;
 	gboolean is_present;
@@ -317,6 +320,9 @@ up_device_supply_battery_set_properties (UpDevice *device, UpAcpiNative *native)
 end:
 	close (fd);
 	return ret;
+#else
+	return FALSE;
+#endif
 }
 
 /**
@@ -325,12 +331,14 @@ end:
 static gboolean
 up_device_supply_acline_set_properties (UpDevice *device)
 {
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 	int acstate;
 
 	if (up_get_int_sysctl (&acstate, NULL, "hw.acpi.acline")) {
 		g_object_set (device, "online", acstate ? TRUE : FALSE, NULL);
 		return TRUE;
 	}
+#endif
 
 	return FALSE;
 }
@@ -379,7 +387,7 @@ out:
  * Return %TRUE on success, %FALSE if we failed to refresh or no data
  **/
 static gboolean
-up_device_supply_refresh (UpDevice *device)
+up_device_supply_refresh (UpDevice *device, UpRefreshReason reason)
 {
 	GObject *object;
 	UpDeviceKind type;
@@ -472,7 +480,6 @@ up_device_supply_init (UpDeviceSupply *supply)
 static void
 up_device_supply_class_init (UpDeviceSupplyClass *klass)
 {
-	GObjectClass *object_class = G_OBJECT_CLASS (klass);
 	UpDeviceClass *device_class = UP_DEVICE_CLASS (klass);
 
 	device_class->get_on_battery = up_device_supply_get_on_battery;
@@ -480,13 +487,3 @@ up_device_supply_class_init (UpDeviceSupplyClass *klass)
 	device_class->coldplug = up_device_supply_coldplug;
 	device_class->refresh = up_device_supply_refresh;
 }
-
-/**
- * up_device_supply_new:
- **/
-UpDeviceSupply *
-up_device_supply_new (void)
-{
-	return g_object_new (UP_TYPE_DEVICE_SUPPLY, NULL);
-}
-

@@ -1,8 +1,6 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
  *
- * Copyright (C) 2015 Kalev Lember <klember@redhat.com>
- *
- * Licensed under the GNU General Public License Version 2
+ * Copyright (C) 2022 Benjamin Berg <bberg@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,23 +14,18 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
-#if !defined (__UPOWER_H_INSIDE__) && !defined (UP_COMPILATION)
-#error "Only <upower.h> can be included directly."
-#endif
+#pragma once
 
-#ifndef __UP_AUTOCLEANUPS_H
-#define __UP_AUTOCLEANUPS_H
+#include "up-enumerator.h"
 
-#ifdef G_DEFINE_AUTOPTR_CLEANUP_FUNC
+G_BEGIN_DECLS
 
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(UpClient, g_object_unref)
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(UpDevice, g_object_unref)
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(UpHistoryItem, g_object_unref)
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(UpStatsItem, g_object_unref)
+#define UP_TYPE_ENUMERATOR_UDEV         (up_enumerator_udev_get_type ())
 
-#endif
+G_DECLARE_FINAL_TYPE (UpEnumeratorUdev, up_enumerator_udev, UP, ENUMERATOR_UDEV, UpEnumerator)
 
-#endif /* __UP_AUTOCLEANUPS_H */
+G_END_DECLS

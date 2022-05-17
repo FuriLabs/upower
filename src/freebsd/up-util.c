@@ -26,7 +26,9 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 #include <sys/sysctl.h>
+#endif
 #include <glib.h>
 
 #include "up-util.h"
@@ -34,6 +36,7 @@
 gboolean
 up_has_sysctl (const gchar *format, ...)
 {
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 	va_list args;
 	gchar *name;
 	size_t value_len;
@@ -49,11 +52,15 @@ up_has_sysctl (const gchar *format, ...)
 
 	g_free (name);
 	return status;
+#else
+	return FALSE;
+#endif
 }
 
 gboolean
 up_get_int_sysctl (int *value, GError **err, const gchar *format, ...)
 {
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 	va_list args;
 	gchar *name;
 	size_t value_len = sizeof(int);
@@ -72,11 +79,15 @@ up_get_int_sysctl (int *value, GError **err, const gchar *format, ...)
 
 	g_free (name);
 	return status;
+#else
+	return FALSE;
+#endif
 }
 
 gchar *
 up_get_string_sysctl (GError **err, const gchar *format, ...)
 {
+#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
 	va_list args;
 	gchar *name;
 	size_t value_len;
@@ -103,6 +114,9 @@ up_get_string_sysctl (GError **err, const gchar *format, ...)
 
 	g_free(name);
 	return str;
+#else
+	return g_strdup ("asdf");
+#endif
 }
 
 /**
@@ -131,7 +145,7 @@ up_make_safe_string (const gchar *text)
 				ret[idx] = ret[i];
 			idx++;
 		} else {
-			g_debug ("invalid char '%c'", ret[i]);
+			g_debug ("invalid char 0x%02X", ret[i]);
 		}
 	}
 
