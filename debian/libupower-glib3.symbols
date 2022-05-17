@@ -155,30 +155,6 @@ libupower-glib.so.3 libupower-glib3 #MINVER#
  (optional)up_exported_device_set_warning_level@Base 0.99.4
  (optional)up_exported_device_skeleton_get_type@Base 0.99.4
  (optional)up_exported_device_skeleton_new@Base 0.99.4
- (optional)up_exported_wakeups_call_get_data@Base 0.99.4
- (optional)up_exported_wakeups_call_get_data_finish@Base 0.99.4
- (optional)up_exported_wakeups_call_get_data_sync@Base 0.99.4
- (optional)up_exported_wakeups_call_get_total@Base 0.99.4
- (optional)up_exported_wakeups_call_get_total_finish@Base 0.99.4
- (optional)up_exported_wakeups_call_get_total_sync@Base 0.99.4
- (optional)up_exported_wakeups_complete_get_data@Base 0.99.4
- (optional)up_exported_wakeups_complete_get_total@Base 0.99.4
- (optional)up_exported_wakeups_emit_data_changed@Base 0.99.4
- (optional)up_exported_wakeups_emit_total_changed@Base 0.99.4
- (optional)up_exported_wakeups_get_has_capability@Base 0.99.4
- (optional)up_exported_wakeups_get_type@Base 0.99.4
- (optional)up_exported_wakeups_interface_info@Base 0.99.4
- (optional)up_exported_wakeups_override_properties@Base 0.99.4
- (optional)up_exported_wakeups_proxy_get_type@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new_finish@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new_for_bus@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new_for_bus_finish@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new_for_bus_sync@Base 0.99.4
- (optional)up_exported_wakeups_proxy_new_sync@Base 0.99.4
- (optional)up_exported_wakeups_set_has_capability@Base 0.99.4
- (optional)up_exported_wakeups_skeleton_get_type@Base 0.99.4
- (optional)up_exported_wakeups_skeleton_new@Base 0.99.4
  up_history_item_get_state@Base 0.99.0
  up_history_item_get_time@Base 0.99.0
  up_history_item_get_type@Base 0.99.0
@@ -196,23 +172,3 @@ libupower-glib.so.3 libupower-glib3 #MINVER#
  up_stats_item_new@Base 0.99.0
  up_stats_item_set_accuracy@Base 0.99.0
  up_stats_item_set_value@Base 0.99.0
- up_wakeup_item_get_cmdline@Base 0.99.0
- up_wakeup_item_get_details@Base 0.99.0
- up_wakeup_item_get_id@Base 0.99.0
- up_wakeup_item_get_is_userspace@Base 0.99.0
- up_wakeup_item_get_old@Base 0.99.0
- up_wakeup_item_get_type@Base 0.99.0
- up_wakeup_item_get_value@Base 0.99.0
- up_wakeup_item_new@Base 0.99.0
- up_wakeup_item_set_cmdline@Base 0.99.0
- up_wakeup_item_set_details@Base 0.99.0
- up_wakeup_item_set_id@Base 0.99.0
- up_wakeup_item_set_is_userspace@Base 0.99.0
- up_wakeup_item_set_old@Base 0.99.0
- up_wakeup_item_set_value@Base 0.99.0
- up_wakeups_get_data_sync@Base 0.99.0
- up_wakeups_get_has_capability@Base 0.99.0
- up_wakeups_get_properties_sync@Base 0.99.0
- up_wakeups_get_total_sync@Base 0.99.0
- up_wakeups_get_type@Base 0.99.0
- up_wakeups_new@Base 0.99.0
