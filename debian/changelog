@@ -1,8 +1,22 @@
-upower (0.99.18-1) UNRELEASED; urgency=medium
+upower (0.99.18-1) unstable; urgency=medium
 
   * New upstream version 0.99.18
+  * Update Build-Depends on meson and libglib2.0-dev as per meson.build
+  * meson: Allow unittest inspector to fail
+  * Install new udev hwdb file
+  * Remove wakeup symbols from libupower-glib3.symbols.
+    Strictly speaking, the removal of the wakeup API constitutes an API/ABI
+    break and the soname of the library should have been bumped. As upower
+    appears to be the only user of that API though, it should be relatively
+    safe without an explicit soname bump.
+    To ensure that both upower and gir1.2-upowerglib-1.0 are upgraded along
+    with libupower-glib3, add versioned Breaks against those packages to
+    libupower-glib3.
+  * Tighten dependency between upower and libupower-glib3.
+    As the server uses internal symbols from libupower-glib, ensure that
+    both packages are always upgraded in lock-step.
 
- -- Michael Biebl <biebl@debian.org>  Tue, 17 May 2022 14:55:10 +0200
+ -- Michael Biebl <biebl@debian.org>  Tue, 17 May 2022 17:35:30 +0200
 
 upower (0.99.17-1) unstable; urgency=medium
 
