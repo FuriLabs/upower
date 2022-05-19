@@ -1,3 +1,9 @@
+upower (0.99.18-2) unstable; urgency=medium
+
+  * Increase shutdown timeout in integration test
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 19 May 2022 17:59:52 +0200
+
 upower (0.99.18-1) unstable; urgency=medium
 
   * New upstream version 0.99.18
