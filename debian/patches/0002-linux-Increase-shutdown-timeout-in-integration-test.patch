@@ -1,0 +1,21 @@
+From: Michael Biebl <biebl@debian.org>
+Date: Thu, 19 May 2022 17:58:10 +0200
+Subject: linux: Increase shutdown timeout in integration test
+
+---
+ src/linux/integration-test.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/linux/integration-test.py b/src/linux/integration-test.py
+index 4319a15..8c0ae2a 100755
+--- a/src/linux/integration-test.py
++++ b/src/linux/integration-test.py
+@@ -231,7 +231,7 @@ class Tests(dbusmock.DBusTestCase):
+             except OSError:
+                 pass
+             try:
+-                self.assertEqual(self.daemon.wait(timeout=2.0), 0)
++                self.assertEqual(self.daemon.wait(timeout=5.0), 0)
+             except TimeoutError:
+                 try:
+                     self.daemon.kill()
