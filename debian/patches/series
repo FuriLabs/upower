@@ -1,2 +1,3 @@
 0001-meson-Allow-unittest-inspector-to-fail.patch
 0002-test-Allow-daemon-to-take-5-seconds-for-shutdown.patch
+0003-test-Disable-systemd-v251-sysfs-verification.patch

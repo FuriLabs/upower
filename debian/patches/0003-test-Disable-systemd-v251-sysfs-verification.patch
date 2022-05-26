@@ -1,0 +1,26 @@
+From: Benjamin Berg <bberg@redhat.com>
+Date: Wed, 25 May 2022 16:53:34 +0200
+Subject: test: Disable systemd v251 sysfs verification
+
+The umockdev code to disable it by setting the variable does not
+propagate through python. Set the variable here until there is a more
+permament solution available.
+
+(cherry picked from commit c330351937090e4c23918c193332735c88e7ad40)
+---
+ src/linux/integration-test.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/linux/integration-test.py b/src/linux/integration-test.py
+index 8c0ae2a..02267c0 100755
+--- a/src/linux/integration-test.py
++++ b/src/linux/integration-test.py
+@@ -193,6 +193,8 @@ class Tests(dbusmock.DBusTestCase):
+         # note: Python doesn't propagate the setenv from Testbed.new(), so we
+         # have to do that ourselves
+         env['UMOCKDEV_DIR'] = self.testbed.get_root_dir()
++        # Hotfix for https://github.com/systemd/systemd/issues/23499
++        env['SYSTEMD_DEVICE_VERIFY_SYSFS'] = '0'
+         self.daemon_log = OutputChecker()
+ 
+         if os.getenv('VALGRIND') != None:
