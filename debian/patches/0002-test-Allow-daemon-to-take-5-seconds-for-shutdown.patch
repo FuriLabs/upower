@@ -1,7 +1,12 @@
-From: Michael Biebl <biebl@debian.org>
-Date: Thu, 19 May 2022 17:58:10 +0200
-Subject: linux: Increase shutdown timeout in integration test
+From: Benjamin Berg <bberg@redhat.com>
+Date: Fri, 20 May 2022 14:35:23 +0200
+Subject: test: Allow daemon to take 5 seconds for shutdown
 
+It seems like shutdown can take more than 2 seconds on some slow
+systems. So increase to 5 seconds which hopefully is long enough.
+
+Closes: #188
+(cherry picked from commit f1c00e50c2033c206f585398fcc2ea329f4494fa)
 ---
  src/linux/integration-test.py | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
