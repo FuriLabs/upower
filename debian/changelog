@@ -1,3 +1,9 @@
+upower (0.99.18-3) unstable; urgency=medium
+
+  * test: Disable systemd v251 sysfs verification
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 26 May 2022 18:49:55 +0200
+
 upower (0.99.18-2) unstable; urgency=medium
 
   * Increase shutdown timeout in integration test
