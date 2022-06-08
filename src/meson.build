@@ -41,6 +41,8 @@ upowerd_private = static_library('upowerd-private',
         'up-history.c',
         'up-backend.h',
         'up-native.h',
+        'up-common.h',
+        'up-common.c',
     ],
     dependencies: [ upowerd_deps ],
     c_args: [ '-DG_LOG_DOMAIN="UPower"' ],
@@ -124,7 +126,7 @@ if os_backend == 'linux' and gobject_introspection.found()
 
     python3 = find_program('python3')
     unittest_inspector = find_program('linux/unittest_inspector.py')
-    r = run_command(unittest_inspector, files('linux/integration-test.py'), check: true)
+    r = run_command(unittest_inspector, files('linux/integration-test.py'), check: false)
     unit_tests = r.stdout().strip().split('\n')
 
     foreach ut: unit_tests

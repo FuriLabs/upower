@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -u
 
 # upower integration test suite
 #
@@ -152,22 +152,19 @@ class Tests(dbusmock.DBusTestCase):
         self.daemon = None
         self.start_logind({'CanHybridSleep' : 'yes'})
 
+    @classmethod
+    def stop_process(cls, proc, timeout=1):
+        proc.terminate()
+        try:
+            proc.wait(timeout)
+        except:
+            print("Killing %d (%s) after timeout of %f seconds" % (proc.pid, proc.args[0], timeout))
+            proc.kill()
+            proc.wait()
+
     def tearDown(self):
         del self.testbed
         self.stop_daemon()
-
-        if self.logind:
-            self.logind.stdout.close()
-            self.logind.terminate()
-            self.logind.wait()
-
-        try:
-            if self.bluez:
-                self.bluez.stdout.close()
-                self.bluez.terminate()
-                self.bluez.wait()
-        except:
-            pass
 
     #
     # Daemon control and D-BUS I/O
@@ -193,6 +190,8 @@ class Tests(dbusmock.DBusTestCase):
         # note: Python doesn't propagate the setenv from Testbed.new(), so we
         # have to do that ourselves
         env['UMOCKDEV_DIR'] = self.testbed.get_root_dir()
+        # Hotfix for https://github.com/systemd/systemd/issues/23499
+        env['SYSTEMD_DEVICE_VERIFY_SYSFS'] = '0'
         self.daemon_log = OutputChecker()
 
         if os.getenv('VALGRIND') != None:
@@ -231,14 +230,14 @@ class Tests(dbusmock.DBusTestCase):
             except OSError:
                 pass
             try:
-                self.assertEqual(self.daemon.wait(timeout=2.0), 0)
-            except TimeoutError:
+                self.assertEqual(self.daemon.wait(timeout=5.0), 0)
+            except subprocess.TimeoutExpired:
                 try:
                     self.daemon.kill()
                 except OSError:
                     pass
                 self.assertEqual(self.daemon.wait(), 0)
-        self.daemon_log.assert_closed()
+            self.daemon_log.assert_closed()
         self.daemon = None
         self.proxy = None
 
@@ -295,13 +294,13 @@ class Tests(dbusmock.DBusTestCase):
 
     def start_logind(self, parameters=None):
         self.logind, self.logind_obj = self.spawn_server_template('logind',
-                                                                  parameters or {},
-                                                                  stdout=subprocess.PIPE)
+                                                                  parameters or {})
+        self.addCleanup(self.stop_process, self.logind)
 
     def start_bluez(self, parameters=None):
         self.bluez, self.bluez_obj = self.spawn_server_template('bluez5',
-                                                                  parameters or {},
-                                                                  stdout=subprocess.PIPE)
+                                                                  parameters or {})
+        self.addCleanup(self.stop_process, self.bluez)
 
     def assertEventually(self, condition, message=None, timeout=50, value=True):
         '''Assert that condition function eventually returns True.
@@ -605,58 +604,81 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_PENDING_CHARGE)
         self.stop_daemon()
 
-    def test_display_pending_charge_other_battery_discharging(self):
-        '''One battery pending-charge and another one discharging'''
+    def test_display_state_aggregation(self):
+        bat0 = self.testbed.add_device('power_supply', 'BAT0', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'Not charging',
+                                        'charge_full', '10500000',
+                                        'charge_full_design', '11000000',
+                                        'capacity', '40',
+                                        'voltage_now', '12000000'], [])
+        bat1 = self.testbed.add_device('power_supply', 'BAT1', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'Not charging',
+                                        'charge_full', '10500000',
+                                        'charge_full_design', '11000000',
+                                        'capacity', '40',
+                                        'voltage_now', '12000000'], [])
 
-        self.testbed.add_device('power_supply', 'BAT0', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'Not charging',
-                                 'charge_full', '10500000',
-                                 'charge_full_design', '11000000',
-                                 'capacity', '40',
-                                 'voltage_now', '12000000'], [])
-        self.testbed.add_device('power_supply', 'BAT1', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'Discharging',
-                                 'charge_full', '10500000',
-                                 'charge_full_design', '11000000',
-                                 'capacity', '40',
-                                 'voltage_now', '12000000'], [])
-
-
-        self.start_daemon()
+        self.start_daemon(warns=True)
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 2)
-        self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_DISCHARGING)
-        self.stop_daemon()
 
-    def test_display_pending_charge_other_battery_charging(self):
-        '''One battery pending-charge and another one charging'''
+        ANY         = -1
+        TBD         = -2
+        CONFLICT    = -3
+        UNKNOWN     = UP_DEVICE_STATE_UNKNOWN
+        CHARGING    = UP_DEVICE_STATE_CHARGING
+        DISCHARGING = UP_DEVICE_STATE_DISCHARGING
+        EMPTY       = UP_DEVICE_STATE_EMPTY
+        FULL        = UP_DEVICE_STATE_FULLY_CHARGED
+        P_CHARGE    = UP_DEVICE_STATE_PENDING_CHARGE
+        P_DISCHARGE = UP_DEVICE_STATE_PENDING_DISCHARGE
 
-        self.testbed.add_device('power_supply', 'BAT0', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'Not charging',
-                                 'charge_full', '10500000',
-                                 'charge_full_design', '11000000',
-                                 'capacity', '40',
-                                 'voltage_now', '12000000'], [])
-        self.testbed.add_device('power_supply', 'BAT1', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'Charging',
-                                 'charge_full', '10500000',
-                                 'charge_full_design', '11000000',
-                                 'capacity', '40',
-                                 'voltage_now', '12000000'], [])
+        states = [ 'Unknown', 'Charging', 'Discharging', 'Empty', 'Full', 'Not Charging' ] #, 'Pending Discharge' ]
+        # pending discharge does not exist on Linux. List it, but it is not tested
+        display_device_state = [
+            # UNKNOWN    , CHARGING   , DISCHARGING, EMPTY      , FULL       , P_CHARGE   , P_DISCHARGE
+             (ANY        , CHARGING   , DISCHARGING, ANY        , ANY        , TBD        , ANY),
+             (CHARGING   , CHARGING   , CONFLICT   , CHARGING   , CHARGING   , CHARGING   , CHARGING),
+             (DISCHARGING, CONFLICT   , DISCHARGING, DISCHARGING, DISCHARGING, DISCHARGING, DISCHARGING),
+             (ANY        , CHARGING   , DISCHARGING, EMPTY      , ANY        , TBD        , ANY),
+             (ANY        , CHARGING   , DISCHARGING, ANY        , ANY        , TBD        , ANY),
+             (TBD        , CHARGING   , DISCHARGING, TBD        , TBD        , P_CHARGE   , ANY),
+             (ANY        , CHARGING   , DISCHARGING, ANY        , ANY        , ANY        , ANY),
+        ]
+        for i in range(len(states)):
+            for j in range(len(states)):
+                # The table should be mirrored
+                assert display_device_state[i][j] == display_device_state[j][i]
 
+                self.testbed.set_attribute(bat0, 'status', states[i])
+                self.testbed.set_attribute(bat1, 'status', states[j])
+                self.testbed.uevent(bat0, 'change')
+                self.testbed.uevent(bat1, 'change')
+                # The uevent can race with the DBus request
+                time.sleep(0.5)
 
-        self.start_daemon()
-        devs = self.proxy.EnumerateDevices()
-        self.assertEqual(len(devs), 2)
-        self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_CHARGING)
+                if display_device_state[i][j] >= 0:
+                    self.assertEqual(self.get_dbus_display_property('State'), display_device_state[i][j],
+                                     msg=f"Unexpected aggregate state for states {states[i]} and {states[j]}")
+                else:
+                    self.assertIn(self.get_dbus_display_property('State'), (
+                        UP_DEVICE_STATE_UNKNOWN,
+                        UP_DEVICE_STATE_CHARGING,
+                        UP_DEVICE_STATE_DISCHARGING,
+                        UP_DEVICE_STATE_EMPTY,
+                        UP_DEVICE_STATE_FULLY_CHARGED,
+                        UP_DEVICE_STATE_PENDING_CHARGE,
+                        UP_DEVICE_STATE_PENDING_DISCHARGE),
+                        msg=f"Invalid aggregate state for states {states[i]} and {states[j]}"
+                    )
+                if display_device_state[i][j] == CONFLICT:
+                    self.daemon_log.check_line_re("Conflicting.*state")
+                else:
+                    self.daemon_log.check_no_line_re("Conflicting.*state")
         self.stop_daemon()
 
     def test_map_pending_charge_to_fully_charged(self):
@@ -678,8 +700,8 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'State'), UP_DEVICE_STATE_FULLY_CHARGED)
         self.stop_daemon()
 
-        # and make sure we still return pending-charge below 100%
-        self.testbed.set_attribute(bat0, 'capacity', '99')
+        # and make sure we still return pending-charge below the threshold
+        self.testbed.set_attribute(bat0, 'capacity', '89')
         self.start_daemon()
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'State'), UP_DEVICE_STATE_PENDING_CHARGE)
         self.stop_daemon()
@@ -1733,6 +1755,47 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Percentage'), 40)
         self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'PowerSupply'), False)
         self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Type'), UP_DEVICE_KIND_KEYBOARD)
+        self.assertEqual(self.get_dbus_property('OnBattery'), False)
+        self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
+        self.stop_daemon()
+
+    def test_bluetooth_mouse_with_keyboard(self):
+        '''mouse with a few keys (but not a keyboard)'''
+
+        dev = self.testbed.add_device('bluetooth',
+                                      'usb2/bluetooth/hci0/hci0:1',
+                                      None,
+                                      [], [])
+
+        parent = dev
+        self.testbed.add_device(
+            'input',
+            'input3/event3',
+            parent,
+            [], ['DEVNAME', 'input/event3', 'ID_INPUT_KEYBOARD', '1', 'ID_INPUT_MOUSE', '1'])
+
+        self.testbed.add_device(
+            'power_supply',
+            'power_supply/hid-00:22:33:44:55:66-battery',
+            parent,
+            ['type', 'Battery',
+             'scope', 'Device',
+             'present', '1',
+             'online', '1',
+             'status', 'Discharging',
+             'capacity', '40',
+             'model_name', 'Monster Mouse'],
+            [])
+
+        self.start_daemon()
+        devs = self.proxy.EnumerateDevices()
+        self.assertEqual(len(devs), 1)
+        kbdbat0_up = devs[0]
+
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Model'), 'Monster Mouse')
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Percentage'), 40)
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'PowerSupply'), False)
+        self.assertEqual(self.get_dbus_dev_property(kbdbat0_up, 'Type'), UP_DEVICE_KIND_MOUSE)
         self.assertEqual(self.get_dbus_property('OnBattery'), False)
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
         self.stop_daemon()

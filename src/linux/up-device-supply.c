@@ -35,13 +35,12 @@
 #include "up-types.h"
 #include "up-constants.h"
 #include "up-device-supply.h"
+#include "up-common.h"
 
 enum {
 	PROP_0,
 	PROP_IGNORE_SYSTEM_PERCENTAGE
 };
-
-#define UP_DEVICE_SUPPLY_CHARGED_THRESHOLD	90.0f	/* % */
 
 #define UP_DEVICE_SUPPLY_COLDPLUG_UNITS_CHARGE		TRUE
 #define UP_DEVICE_SUPPLY_COLDPLUG_UNITS_ENERGY		FALSE
@@ -293,32 +292,6 @@ up_device_supply_calculate_rate (UpDeviceSupply *supply, gdouble energy)
 }
 
 /**
- * up_device_supply_convert_device_technology:
- **/
-static UpDeviceTechnology
-up_device_supply_convert_device_technology (const gchar *type)
-{
-	if (type == NULL)
-		return UP_DEVICE_TECHNOLOGY_UNKNOWN;
-	/* every case combination of Li-Ion is commonly used.. */
-	if (g_ascii_strcasecmp (type, "li-ion") == 0 ||
-	    g_ascii_strcasecmp (type, "lion") == 0)
-		return UP_DEVICE_TECHNOLOGY_LITHIUM_ION;
-	if (g_ascii_strcasecmp (type, "pb") == 0 ||
-	    g_ascii_strcasecmp (type, "pbac") == 0)
-		return UP_DEVICE_TECHNOLOGY_LEAD_ACID;
-	if (g_ascii_strcasecmp (type, "lip") == 0 ||
-	    g_ascii_strcasecmp (type, "lipo") == 0 ||
-	    g_ascii_strcasecmp (type, "li-poly") == 0)
-		return UP_DEVICE_TECHNOLOGY_LITHIUM_POLYMER;
-	if (g_ascii_strcasecmp (type, "nimh") == 0)
-		return UP_DEVICE_TECHNOLOGY_NICKEL_METAL_HYDRIDE;
-	if (g_ascii_strcasecmp (type, "life") == 0)
-		return UP_DEVICE_TECHNOLOGY_LITHIUM_IRON_PHOSPHATE;
-	return UP_DEVICE_TECHNOLOGY_UNKNOWN;
-}
-
-/**
  * up_device_supply_get_string:
  **/
 static gchar *
@@ -405,38 +378,6 @@ up_device_supply_get_design_voltage (UpDeviceSupply *device,
 out:
 	g_free (device_type);
 	return voltage;
-}
-
-/**
- * up_device_supply_make_safe_string:
- **/
-static void
-up_device_supply_make_safe_string (gchar *text)
-{
-	guint i;
-	guint idx = 0;
-
-	/* no point checking */
-	if (text == NULL)
-		return;
-
-	if (g_utf8_validate (text, -1, NULL))
-		return;
-
-	/* shunt up only safe chars */
-	for (i=0; text[i] != '\0'; i++) {
-		if (g_ascii_isprint (text[i])) {
-			/* only copy if the address is going to change */
-			if (idx != i)
-				text[idx] = text[i];
-			idx++;
-		} else {
-			g_debug ("invalid char: 0x%02X", text[i]);
-		}
-	}
-
-	/* ensure null terminated */
-	text[idx] = '\0';
 }
 
 static gboolean
@@ -565,12 +506,6 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 	gchar *manufacturer = NULL;
 	gchar *model_name = NULL;
 	gchar *serial_number = NULL;
-	UpDaemon *daemon;
-	gboolean ac_online = FALSE;
-	gboolean has_ac = FALSE;
-	gboolean online;
-	UpDeviceList *devices_list;
-	GPtrArray *devices;
 	guint i;
 
 	native = G_UDEV_DEVICE (up_device_get_native (device));
@@ -602,7 +537,7 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 
 		/* the ACPI spec is bad at defining battery type constants */
 		technology_native = up_device_supply_get_string (native, "technology");
-		g_object_set (device, "technology", up_device_supply_convert_device_technology (technology_native), NULL);
+		g_object_set (device, "technology", up_convert_device_technology (technology_native), NULL);
 
 		/* get values which may be blank */
 		manufacturer = up_device_supply_get_string (native, "manufacturer");
@@ -610,9 +545,9 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 		serial_number = up_device_supply_get_string (native, "serial_number");
 
 		/* some vendors fill this with binary garbage */
-		up_device_supply_make_safe_string (manufacturer);
-		up_device_supply_make_safe_string (model_name);
-		up_device_supply_make_safe_string (serial_number);
+		up_make_safe_string (manufacturer);
+		up_make_safe_string (model_name);
+		up_make_safe_string (serial_number);
 
 		g_object_set (device,
 			      "vendor", manufacturer,
@@ -737,61 +672,8 @@ up_device_supply_refresh_battery (UpDeviceSupply *supply,
 	/* Some devices report "Not charging" when the battery is full and AC
 	 * power is connected. In this situation we should report fully-charged
 	 * instead of pending-charge. */
-	if (state == UP_DEVICE_STATE_PENDING_CHARGE && percentage == 100.0)
+	if (state == UP_DEVICE_STATE_PENDING_CHARGE && percentage >= UP_FULLY_CHARGED_THRESHOLD)
 		state = UP_DEVICE_STATE_FULLY_CHARGED;
-
-	/* the battery isn't charging or discharging, it's just
-	 * sitting there half full doing nothing: try to guess a state */
-	if (state == UP_DEVICE_STATE_UNKNOWN) {
-		daemon = up_device_get_daemon (device);
-
-		/* If we have any online AC, assume charging, otherwise
-		 * discharging */
-		devices_list = up_daemon_get_device_list (daemon);
-		devices = up_device_list_get_array (devices_list);
-		for (i=0; i < devices->len; i++) {
-			if (up_device_get_online ((UpDevice *) g_ptr_array_index (devices, i), &online)) {
-			       has_ac = TRUE;
-				if (online) {
-					ac_online = TRUE;
-				}
-				break;
-			}
-		}
-		g_ptr_array_unref (devices);
-		g_object_unref (devices_list);
-
-		if (has_ac) {
-			if (ac_online) {
-				if (percentage > UP_DEVICE_SUPPLY_CHARGED_THRESHOLD)
-					state = UP_DEVICE_STATE_FULLY_CHARGED;
-				else
-					state = UP_DEVICE_STATE_CHARGING;
-			} else {
-				if (percentage < 1.0f)
-					state = UP_DEVICE_STATE_EMPTY;
-				else
-					state = UP_DEVICE_STATE_DISCHARGING;
-			}
-		} else {
-			/* only guess when we have only one battery */
-			if (up_daemon_get_number_devices_of_type (daemon, UP_DEVICE_KIND_BATTERY)  == 1) {
-				if (percentage < 1.0f)
-					state = UP_DEVICE_STATE_EMPTY;
-				else
-					state = UP_DEVICE_STATE_DISCHARGING;
-			}
-
-			/* if we have multiple batteries and don't know their
-			 * state, give up and leave it as "unknown". */
-		}
-
-		/* print what we did */
-		g_debug ("guessing battery state '%s': AC present: %i, AC online: %i",
-			   up_device_state_to_string (state), has_ac, ac_online);
-
-		g_object_unref (daemon);
-	}
 
 	/* if empty, and BIOS does not know what to do */
 	if (state == UP_DEVICE_STATE_UNKNOWN && energy < 0.01) {
@@ -898,8 +780,8 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		serial_number = up_device_supply_get_string (native, "serial_number");
 
 		/* some vendors fill this with binary garbage */
-		up_device_supply_make_safe_string (model_name);
-		up_device_supply_make_safe_string (serial_number);
+		up_make_safe_string (model_name);
+		up_make_safe_string (serial_number);
 
 		g_object_set (device,
 			      "is-present", TRUE,
@@ -959,13 +841,21 @@ up_device_supply_sibling_discovered (UpDevice *device,
 		const char *prop;
 		UpDeviceKind type;
 	} types[] = {
-		/* In order of type priority, we never downgrade here (loop aborts). */
+		/* In order of type priority (*within* one input node). */
 		{ "ID_INPUT_TABLET", UP_DEVICE_KIND_TABLET },
-		{ "ID_INPUT_TABLET_PAD", UP_DEVICE_KIND_TABLET },
-		{ "ID_INPUT_KEYBOARD", UP_DEVICE_KIND_KEYBOARD },
 		{ "ID_INPUT_TOUCHPAD", UP_DEVICE_KIND_TOUCHPAD },
 		{ "ID_INPUT_MOUSE", UP_DEVICE_KIND_MOUSE },
 		{ "ID_INPUT_JOYSTICK", UP_DEVICE_KIND_GAMING_INPUT },
+		{ "ID_INPUT_KEYBOARD", UP_DEVICE_KIND_KEYBOARD },
+	};
+	/* The type priority if we have multiple siblings,
+	 * i.e. we select the first of the current type of the found type. */
+	UpDeviceKind priority[] = {
+		UP_DEVICE_KIND_KEYBOARD,
+		UP_DEVICE_KIND_TABLET,
+		UP_DEVICE_KIND_TOUCHPAD,
+		UP_DEVICE_KIND_MOUSE,
+		UP_DEVICE_KIND_GAMING_INPUT,
 	};
 
 	if (!G_UDEV_IS_DEVICE (sibling))
@@ -990,8 +880,8 @@ up_device_supply_sibling_discovered (UpDevice *device,
 		model_name = up_device_supply_get_string (input, "name");
 		serial_number = up_device_supply_get_string (input, "uniq");
 
-		up_device_supply_make_safe_string (model_name);
-		up_device_supply_make_safe_string (serial_number);
+		up_make_safe_string (model_name);
+		up_make_safe_string (serial_number);
 
 		g_object_set (device,
 			      "model", model_name,
@@ -1006,12 +896,22 @@ up_device_supply_sibling_discovered (UpDevice *device,
 	new_type = UP_DEVICE_KIND_KEYBOARD;
 
 	for (i = 0; i < G_N_ELEMENTS (types); i++) {
-		if (types[i].type == cur_type ||
-		    g_udev_device_get_property_as_boolean (input, types[i].prop)) {
+		if (g_udev_device_get_property_as_boolean (input, types[i].prop)) {
 			new_type = types[i].type;
 			break;
 		}
 	}
+
+	for (i = 0; i < G_N_ELEMENTS (priority); i++) {
+		if (priority[i] == cur_type || priority[i] == new_type) {
+			new_type = priority[i];
+			break;
+		}
+	}
+
+	/* TODO: Add a heuristic here (and during initial discovery) that uses
+	 *       the model name.
+	 */
 
 	if (cur_type != new_type)
 		g_object_set (device, "type", new_type, NULL);
