@@ -5,6 +5,7 @@ Maintainer: Utopia Maintenance Team <pkg-utopia-maintainers@lists.alioth.debian.
 Uploaders: Michael Biebl <biebl@debian.org>,
            Martin Pitt <mpitt@debian.org>,
 Build-Depends: debhelper-compat (= 13),
+               dh-sequence-gir,
                dh-exec,
                meson (>= 0.56.0),
                gobject-introspection,
