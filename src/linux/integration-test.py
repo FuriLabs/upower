@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import unittest
 import time
+import re
 from output_checker import OutputChecker
 from packaging.version import parse as parse_version
 
@@ -546,45 +547,54 @@ class Tests(dbusmock.DBusTestCase):
     def test_unknown_battery_status_no_ac(self):
         '''Unknown battery charge status, no AC'''
 
-        self.testbed.add_device('power_supply', 'BAT0', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'unknown',
-                                 'energy_full', '60000000',
-                                 'energy_full_design', '80000000',
-                                 'energy_now', '48000000',
-                                 'voltage_now', '12000000'], [])
+        for i in range(2):
+            self.testbed.add_device('power_supply', f'BAT{i}', None,
+                                    ['type', 'Battery',
+                                     'present', '1',
+                                     'status', 'unknown',
+                                     'energy_full', '60000000',
+                                     'energy_full_design', '80000000',
+                                     'energy_now', '48000000',
+                                     'voltage_now', '12000000'], [])
 
-        # with no other power sources, the OnBattery value here is really
-        # arbitrary, so don't test it. The only thing we know for sure is that
-        # we aren't on low battery
-        self.start_daemon()
-        self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
-        self.stop_daemon()
+            # with no other power sources, the OnBattery value here is really
+            # arbitrary, so don't test it. The only thing we know for sure is that
+            # we aren't on low battery
+            self.start_daemon()
+            time.sleep(0.5)
+            self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
+            self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_DISCHARGING)
+            self.stop_daemon()
 
     def test_unknown_battery_status_with_ac(self):
         '''Unknown battery charge status, with AC'''
 
-        self.testbed.add_device('power_supply', 'BAT0', None,
-                                ['type', 'Battery',
-                                 'present', '1',
-                                 'status', 'unknown',
-                                 'energy_full', '60000000',
-                                 'energy_full_design', '80000000',
-                                 'energy_now', '48000000',
-                                 'voltage_now', '12000000'], [])
         ac = self.testbed.add_device('power_supply', 'AC', None,
                                      ['type', 'Mains', 'online', '0'], [])
-        self.start_daemon()
-        self.assertEqual(self.get_dbus_property('OnBattery'), True)
-        self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
-        self.stop_daemon()
 
-        self.testbed.set_attribute(ac, 'online', '1')
-        self.start_daemon()
-        self.assertEqual(self.get_dbus_property('OnBattery'), False)
-        self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
-        self.stop_daemon()
+        for i in range(2):
+            self.testbed.add_device('power_supply', f'BAT{i}', None,
+                                    ['type', 'Battery',
+                                     'present', '1',
+                                     'status', 'unknown',
+                                     'energy_full', '60000000',
+                                     'energy_full_design', '80000000',
+                                     'energy_now', '48000000',
+                                     'voltage_now', '12000000'], [])
+
+            self.testbed.set_attribute(ac, 'online', '0')
+            self.start_daemon()
+            self.assertEqual(self.get_dbus_property('OnBattery'), True)
+            self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
+            self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_DISCHARGING)
+            self.stop_daemon()
+
+            self.testbed.set_attribute(ac, 'online', '1')
+            self.start_daemon()
+            self.assertEqual(self.get_dbus_property('OnBattery'), False)
+            self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
+            self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_CHARGING)
+            self.stop_daemon()
 
     def test_display_pending_charge_one_battery(self):
         '''One battery pending-charge'''
@@ -622,7 +632,14 @@ class Tests(dbusmock.DBusTestCase):
                                         'capacity', '40',
                                         'voltage_now', '12000000'], [])
 
-        self.start_daemon(warns=True)
+        config = tempfile.NamedTemporaryFile(delete=False, mode='w')
+        # The unknown poll can cause issues for test synchronization
+        config.write("[UPower]\n")
+        config.write("NoPollBatteries=true\n")
+        config.close()
+        self.addCleanup(os.unlink, config.name)
+
+        self.start_daemon(config.name, warns=True)
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 2)
 
@@ -649,17 +666,35 @@ class Tests(dbusmock.DBusTestCase):
              (TBD        , CHARGING   , DISCHARGING, TBD        , TBD        , P_CHARGE   , ANY),
              (ANY        , CHARGING   , DISCHARGING, ANY        , ANY        , ANY        , ANY),
         ]
+
+        self.daemon_log.clear()
         for i in range(len(states)):
             for j in range(len(states)):
                 # The table should be mirrored
                 assert display_device_state[i][j] == display_device_state[j][i]
 
+                print(f'Test states are {states[i]} and {states[j]} expected state is {states[display_device_state[i][j]]}')
+
                 self.testbed.set_attribute(bat0, 'status', states[i])
                 self.testbed.set_attribute(bat1, 'status', states[j])
                 self.testbed.uevent(bat0, 'change')
+                # We can't guarantee that both uevents are processed without
+                # the idle handler running. So, lets wait for the idle handler
+                # to calculate the composite battery state.
+                self.daemon_log.check_line('Calculating percentage', timeout=2.0)
                 self.testbed.uevent(bat1, 'change')
-                # The uevent can race with the DBus request
-                time.sleep(0.5)
+
+                # TODO: Make this more elegant somehow
+                lines = self.daemon_log.check_line('Calculating percentage', timeout=2.0)
+                for l in lines:
+                     found = bool(re.match(b".*Conflicting.*state.*", l))
+                     if found:
+                         break
+
+                if display_device_state[i][j] == CONFLICT:
+                    self.assertTrue(found)
+                else:
+                    self.assertFalse(found)
 
                 if display_device_state[i][j] >= 0:
                     self.assertEqual(self.get_dbus_display_property('State'), display_device_state[i][j],
@@ -675,10 +710,7 @@ class Tests(dbusmock.DBusTestCase):
                         UP_DEVICE_STATE_PENDING_DISCHARGE),
                         msg=f"Invalid aggregate state for states {states[i]} and {states[j]}"
                     )
-                if display_device_state[i][j] == CONFLICT:
-                    self.daemon_log.check_line_re("Conflicting.*state")
-                else:
-                    self.daemon_log.check_no_line_re("Conflicting.*state")
+
         self.stop_daemon()
 
     def test_map_pending_charge_to_fully_charged(self):

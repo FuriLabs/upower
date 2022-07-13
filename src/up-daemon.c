@@ -233,6 +233,24 @@ up_daemon_update_display_battery (UpDaemon *daemon)
 		num_batteries++;
 	}
 
+	/* Handle multiple batteries */
+	if (num_batteries <= 1)
+		goto out;
+
+	g_debug ("Calculating percentage and time to full/to empty for %i batteries", num_batteries);
+
+	/* use percentage weighted for each battery capacity
+	 * fall back to averaging the batteries.
+	 * ASSUMPTION: If one battery has energy data, then all batteries do
+	 */
+	if (energy_full_total > 0.0)
+		percentage_total = 100.0 * energy_total / energy_full_total;
+	else
+		percentage_total = percentage_total / num_batteries;
+
+out:
+	g_ptr_array_unref (array);
+
 	/* No battery means LAST state. If we have an UNKNOWN state (with
 	 * a battery) then try to infer one. */
 	if (state_total == UP_DEVICE_STATE_LAST) {
@@ -242,49 +260,27 @@ up_daemon_update_display_battery (UpDaemon *daemon)
 
 		ac_online = up_daemon_get_on_ac_local (daemon, &has_ac);
 
-		if (has_ac) {
-			if (ac_online) {
-				if (percentage_total >= UP_FULLY_CHARGED_THRESHOLD)
-					state_total = UP_DEVICE_STATE_FULLY_CHARGED;
-				else
-					state_total = UP_DEVICE_STATE_CHARGING;
-			} else {
-				if (percentage_total < 1.0f)
-					state_total = UP_DEVICE_STATE_EMPTY;
-				else
-					state_total = UP_DEVICE_STATE_DISCHARGING;
-			}
+		if (has_ac && ac_online) {
+			if (percentage_total >= UP_FULLY_CHARGED_THRESHOLD)
+				state_total = UP_DEVICE_STATE_FULLY_CHARGED;
+			else
+				state_total = UP_DEVICE_STATE_CHARGING;
 		} else {
-			/* only guess when we have only one battery */
-			if (up_daemon_get_number_devices_of_type (daemon, UP_DEVICE_KIND_BATTERY)  == 1) {
-				if (percentage_total < 1.0f)
-					state_total = UP_DEVICE_STATE_EMPTY;
-				else
-					state_total = UP_DEVICE_STATE_DISCHARGING;
-			}
+			if (percentage_total < 1.0f)
+				state_total = UP_DEVICE_STATE_EMPTY;
+			else
+				state_total = UP_DEVICE_STATE_DISCHARGING;
 		}
 	}
 
-	/* Handle multiple batteries */
-	if (num_batteries <= 1)
-		goto out;
-
-	g_debug ("Calculating percentage and time to full/to empty for %i batteries", num_batteries);
-
-	/* use percentage weighted for each battery capacity */
-	if (energy_full_total > 0.0)
-		percentage_total = 100.0 * energy_total / energy_full_total;
-
-	/* calculate a quick and dirty time remaining value */
+	/* calculate a quick and dirty time remaining value
+	 * NOTE: Keep in sync with per-battery estimation code! */
 	if (energy_rate_total > 0) {
 		if (state_total == UP_DEVICE_STATE_DISCHARGING)
 			time_to_empty_total = SECONDS_PER_HOUR * (energy_total / energy_rate_total);
 		else if (state_total == UP_DEVICE_STATE_CHARGING)
 			time_to_full_total = SECONDS_PER_HOUR * ((energy_full_total - energy_total) / energy_rate_total);
 	}
-
-out:
-	g_ptr_array_unref (array);
 
 	/* Did anything change? */
 	if (daemon->priv->kind == kind_total &&
@@ -538,6 +534,10 @@ up_daemon_startup (UpDaemon *daemon,
 
 	/* get battery state */
 	up_daemon_update_warning_level (daemon);
+
+	/* Run mainloop now to avoid state changes on DBus */
+	while (g_main_context_iteration (NULL, FALSE)) { }
+
 	g_debug ("daemon now not coldplug");
 
 out:
@@ -926,6 +926,8 @@ up_daemon_resume_poll (UpDaemon *daemon)
 	g_debug ("Polling will be resumed");
 
 	daemon->priv->poll_paused = FALSE;
+
+	g_source_set_ready_time (daemon->priv->poll_source, 0);
 }
 
 void
