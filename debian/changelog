@@ -1,8 +1,10 @@
-upower (0.99.20-1) UNRELEASED; urgency=medium
+upower (0.99.20-1) unstable; urgency=medium
 
   * New upstream version 0.99.20
+  * Drop patches, applied upstream
+  * Use dh-sequence-gir Build-Depends to enable the gir addon
 
- -- Michael Biebl <biebl@debian.org>  Wed, 13 Jul 2022 18:19:09 +0200
+ -- Michael Biebl <biebl@debian.org>  Wed, 13 Jul 2022 18:39:40 +0200
 
 upower (0.99.19-1) unstable; urgency=medium
 
