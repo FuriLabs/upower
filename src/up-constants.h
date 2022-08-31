@@ -28,8 +28,11 @@ G_BEGIN_DECLS
 
 #define UP_DAEMON_UNKNOWN_TIMEOUT			   1 /* second */
 #define UP_DAEMON_UNKNOWN_POLL_TIME			   5 /* second */
+#define UP_DAEMON_ESTIMATE_TIMEOUT			   5 /* second */
 #define UP_DAEMON_SHORT_TIMEOUT				  30 /* seconds */
 #define UP_DAEMON_LONG_TIMEOUT				 120 /* seconds */
+
+#define UP_DAEMON_DISTRUST_RATE_TIMEOUT			  10 /* second */
 
 #define UP_FULLY_CHARGED_THRESHOLD			  90 /* % */
 #define UP_DAEMON_EPSILON				0.01 /* I can't believe it's not zero */
