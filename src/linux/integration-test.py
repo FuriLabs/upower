@@ -596,6 +596,46 @@ class Tests(dbusmock.DBusTestCase):
             self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_CHARGING)
             self.stop_daemon()
 
+    def test_battery_state_guessing(self):
+        energy_now = 48000000
+        ac = self.testbed.add_device('power_supply', 'AC', None,
+                                     ['type', 'Mains', 'online', '0'], [])
+        bat0 = self.testbed.add_device('power_supply', f'BAT0', None,
+                                       ['type', 'Battery',
+                                        'present', '1',
+                                        'status', 'unknown',
+                                        'energy_full', '60000000',
+                                        'energy_full_design', '80000000',
+                                        'energy_now', str(energy_now),
+                                        'voltage_now', '12000000'], [])
+
+        self.start_daemon()
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_UNKNOWN }, 'line_power_AC' : {} })
+        # Discharge for 20s:
+        for i in range(25):
+            time.sleep(1)
+            energy_now -= 10.0 / 3600
+            self.testbed.set_attribute(bat0, 'energy_now', str(int(energy_now)))
+
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_DISCHARGING }, 'line_power_AC' : {} })
+
+        # History is discarded, we have an unknown state
+        # (the "online" state does not actually matter for the test)
+        self.testbed.set_attribute(bat0, 'online', '1')
+        self.testbed.uevent(ac, 'change')
+        time.sleep(1)
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_UNKNOWN }, 'line_power_AC' : {} })
+
+        # Charge for a while
+        for i in range(25):
+            time.sleep(1)
+            energy_now += 10.0 / 3600
+            self.testbed.set_attribute(bat0, 'energy_now', str(int(energy_now)))
+
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_CHARGING }, 'line_power_AC' : {} })
+
+        self.stop_daemon()
+
     def test_display_pending_charge_one_battery(self):
         '''One battery pending-charge'''
 
@@ -612,6 +652,40 @@ class Tests(dbusmock.DBusTestCase):
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 1)
         self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_PENDING_CHARGE)
+        self.stop_daemon()
+
+    def test_empty_guessing(self):
+        '''One empty batter not reporting a state'''
+
+        self.testbed.add_device('power_supply', 'BAT0', None,
+                                ['type', 'Battery',
+                                 'present', '1',
+                                 'status', 'Unknown',
+                                 'charge_full', '10500000',
+                                 'charge_full_design', '11000000',
+                                 'capacity', '0',
+                                 'voltage_now', '12000000'], [])
+
+        self.start_daemon()
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_EMPTY } })
+        self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_EMPTY)
+        self.stop_daemon()
+
+    def test_full_guessing(self):
+        '''One full batter not reporting a state'''
+
+        self.testbed.add_device('power_supply', 'BAT0', None,
+                                ['type', 'Battery',
+                                 'present', '1',
+                                 'status', 'Unknown',
+                                 'charge_full', '10500000',
+                                 'charge_full_design', '11000000',
+                                 'capacity', '99',
+                                 'voltage_now', '12000000'], [])
+
+        self.start_daemon()
+        self.assertDevs({ 'battery_BAT0': { 'State' : UP_DEVICE_STATE_FULLY_CHARGED } })
+        self.assertEqual(self.get_dbus_display_property('State'), UP_DEVICE_STATE_FULLY_CHARGED)
         self.stop_daemon()
 
     def test_display_state_aggregation(self):
@@ -771,7 +845,7 @@ class Tests(dbusmock.DBusTestCase):
         self.stop_daemon()
 
     def test_battery_energy_charge_mixed(self):
-        '''battery which reports current energy, but full charge'''
+        '''battery which reports both current charge and energy'''
 
         self.testbed.add_device('power_supply', 'BAT0', None,
                                 ['type', 'Battery',
@@ -779,7 +853,8 @@ class Tests(dbusmock.DBusTestCase):
                                  'status', 'Discharging',
                                  'charge_full', '10500000',
                                  'charge_full_design', '11000000',
-                                 'energy_now', '50400000',
+                                 'charge_now', '4200000',
+                                 'energy_now', '9999999',
                                  'voltage_now', '12000000'], [])
 
         self.start_daemon()
@@ -791,7 +866,7 @@ class Tests(dbusmock.DBusTestCase):
         self.assertEqual(self.get_dbus_display_property('WarningLevel'), UP_DEVICE_LEVEL_NONE)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'IsPresent'), True)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'State'), UP_DEVICE_STATE_DISCHARGING)
-        self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Energy'), 50.4)
+        self.assertAlmostEqual(self.get_dbus_dev_property(bat0_up, 'Energy'), 50.4)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'EnergyFull'), 126.0)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'EnergyFullDesign'), 132.0)
         self.assertEqual(self.get_dbus_dev_property(bat0_up, 'Voltage'), 12.0)
@@ -1189,6 +1264,48 @@ class Tests(dbusmock.DBusTestCase):
         self.daemon_log.check_line("deferring as earlier timeout is already queued")
 
         self.stop_daemon()
+
+    def test_battery_id_change(self):
+        '''check that we save/load the history correctly when the ID changes'''
+
+        bat0 = self.testbed.add_device('power_supply', 'BAT0', None,
+                                       ['type', 'Battery',
+                                        'manufacturer', 'FDO',
+                                        'model_name', 'Fake Battery',
+                                        'serial_number', '001',
+                                        'present', '1',
+                                        'status', 'Discharging',
+                                        'energy_full', '60000000',
+                                        'energy_full_design', '80000000',
+                                        'energy_now', '50000000',
+                                        'voltage_now', '12000000'], [])
+
+        self.start_daemon()
+
+        self.daemon_log.check_line(f"using id: Fake_Battery-80-001", timeout=1)
+
+        # Change the serial of the battery
+        self.testbed.set_attribute(bat0, 'energy_full_design', '90000000')
+        self.testbed.set_attribute(bat0, 'serial_number', '002')
+        self.testbed.uevent(bat0, 'change')
+
+        # This saves the old history, and then opens a new one
+        self.daemon_log.check_line_re(f"saved .*/history-time-empty-Fake_Battery-80-001.dat", timeout=1)
+        self.daemon_log.check_line(f"using id: Fake_Battery-90-002", timeout=1)
+
+        # Only happens once
+        self.daemon_log.check_no_line(f"using id:", wait=1.0)
+
+        # Remove the battery
+        self.testbed.set_attribute(bat0, 'present', '0')
+        self.testbed.uevent(bat0, 'change')
+
+        # This saves the old history, and does *not* open a new one
+        self.daemon_log.check_line_re(f"saved .*/history-time-empty-Fake_Battery-90-002.dat", timeout=1)
+        self.daemon_log.check_no_line(f"using id:", wait=1.0)
+
+        self.stop_daemon()
+
 
     def test_percentage_low_icon_set(self):
         '''Without battery level, PercentageLow is limit for icon change'''
