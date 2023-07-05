@@ -45,6 +45,11 @@ typedef struct
 
 	gint64			last_refresh;
 	int			poll_timeout;
+
+	/* This is TRUE if the wireless_status property is present, and
+	 * its value is "disconnected"
+	 * See https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_interface */
+	gboolean		disconnected;
 } UpDevicePrivate;
 
 static void up_device_initable_iface_init (GInitableIface *iface);
@@ -60,6 +65,7 @@ enum {
   PROP_NATIVE,
   PROP_LAST_REFRESH,
   PROP_POLL_TIMEOUT,
+  PROP_DISCONNECTED,
   N_PROPS
 };
 
@@ -423,13 +429,28 @@ up_device_compute_object_path (UpDevice *device)
 	return object_path;
 }
 
-static void
-up_device_register_device (UpDevice *device)
+void
+up_device_register (UpDevice *device)
 {
-	char *object_path = up_device_compute_object_path (device);
-	g_debug ("object path = %s", object_path);
-	up_device_export_skeleton (device, object_path);
-	g_free (object_path);
+	g_autofree char *computed_object_path = NULL;
+
+	if (g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (device)) != NULL)
+		return;
+	computed_object_path = up_device_compute_object_path (device);
+	g_debug ("Exported UpDevice with path %s", computed_object_path);
+	up_device_export_skeleton (device, computed_object_path);
+}
+
+void
+up_device_unregister (UpDevice *device)
+{
+	g_autofree char *object_path = NULL;
+
+	object_path = g_strdup (g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (device)));
+	if (object_path != NULL) {
+		g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (device));
+		g_debug ("Unexported UpDevice with path %s", object_path);
+	}
 }
 
 /**
@@ -492,7 +513,7 @@ up_device_initable_init (GInitable     *initable,
 
 register_device:
 	/* put on the bus */
-	up_device_register_device (device);
+	up_device_register (device);
 
 	return TRUE;
 }
@@ -746,6 +767,10 @@ up_device_set_property (GObject      *object,
 		priv->poll_timeout = g_value_get_int (value);
 		break;
 
+	case PROP_DISCONNECTED:
+		priv->disconnected = g_value_get_boolean (value);
+		break;
+
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 	}
@@ -768,6 +793,10 @@ up_device_get_property (GObject      *object,
 
 	case PROP_LAST_REFRESH:
 		g_value_set_int64 (value, priv->last_refresh);
+		break;
+
+	case PROP_DISCONNECTED:
+		g_value_set_boolean (value, priv->disconnected);
 		break;
 
 	default:
@@ -818,6 +847,13 @@ up_device_class_init (UpDeviceClass *klass)
 		                    G_MAXINT64,
 		                    0,
 		                    G_PARAM_STATIC_STRINGS | G_PARAM_READABLE);
+
+	properties[PROP_DISCONNECTED] =
+		g_param_spec_boolean ("disconnected",
+		                      "Disconnected",
+		                      "Whethe wireless device is disconnected",
+		                      FALSE,
+		                      G_PARAM_STATIC_STRINGS | G_PARAM_WRITABLE | G_PARAM_READABLE);
 
 	g_object_class_install_properties (object_class, N_PROPS, properties);
 }

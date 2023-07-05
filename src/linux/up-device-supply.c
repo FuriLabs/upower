@@ -215,7 +215,6 @@ sysfs_get_capacity_level (GUdevDevice   *native,
 		{ "Full",     100.0, UP_DEVICE_LEVEL_FULL },
 		{ "Unknown",   50.0, UP_DEVICE_LEVEL_UNKNOWN }
 	};
-	guint len;
 
 	g_return_val_if_fail (level != NULL, -1.0);
 
@@ -226,14 +225,12 @@ sysfs_get_capacity_level (GUdevDevice   *native,
 	}
 
 	*level = UP_DEVICE_LEVEL_UNKNOWN;
-	str = g_strdup (g_udev_device_get_sysfs_attr_uncached (native, "capacity_level"));
+	str = g_strchomp (g_strdup (g_udev_device_get_sysfs_attr_uncached (native, "capacity_level")));
 	if (!str) {
 		g_debug ("Failed to read capacity_level!");
 		return ret;
 	}
 
-	len = strlen(str);
-	str[len -1] = '\0';
 	for (i = 0; i < G_N_ELEMENTS(levels); i++) {
 		if (strcmp (levels[i].str, str) == 0) {
 			ret = levels[i].percentage;
@@ -258,6 +255,7 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 	GUdevDevice *native;
 	gdouble percentage = 0.0f;
 	UpDeviceLevel level = UP_DEVICE_LEVEL_NONE;
+	gboolean is_present = TRUE;
 
 	native = G_UDEV_DEVICE (up_device_get_native (device));
 
@@ -275,7 +273,6 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		up_make_safe_string (serial_number);
 
 		g_object_set (device,
-			      "is-present", TRUE,
 			      "model", model_name,
 			      "serial", serial_number,
 			      "is-rechargeable", TRUE,
@@ -290,6 +287,10 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		g_free (serial_number);
 	}
 
+	/* Some devices change whether they're present or not */
+	if (g_udev_device_has_sysfs_attr_uncached (native, "present"))
+		is_present = g_udev_device_get_sysfs_attr_as_boolean_uncached (native, "present");
+
 	/* get a precise percentage */
 	percentage = g_udev_device_get_sysfs_attr_as_double_uncached (native, "capacity");
 	if (percentage == 0.0f)
@@ -298,7 +299,10 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 	if (percentage < 0.0) {
 		/* Probably talking to the device over Bluetooth */
 		state = UP_DEVICE_STATE_UNKNOWN;
-		g_object_set (device, "state", state, NULL);
+		g_object_set (device,
+			      "state", state,
+			      "is-present", is_present,
+			      NULL);
 		return FALSE;
 	}
 
@@ -313,17 +317,17 @@ up_device_supply_refresh_device (UpDeviceSupply *supply,
 		      "percentage", percentage,
 		      "battery-level", level,
 		      "state", state,
+		      "is-present", is_present,
 		      NULL);
 
 	return TRUE;
 }
 
 static void
-up_device_supply_sibling_discovered (UpDevice *device,
-				     GObject  *sibling)
+up_device_supply_sibling_discovered_guess_type (UpDevice *device,
+						GObject  *sibling)
 {
 	GUdevDevice *input;
-	g_autofree char *device_type = NULL;
 	UpDeviceKind cur_type, new_type;
 	char *model_name;
 	char *serial_number;
@@ -333,6 +337,7 @@ up_device_supply_sibling_discovered (UpDevice *device,
 		UpDeviceKind type;
 	} types[] = {
 		/* In order of type priority (*within* one input node). */
+		{ "SOUND_INITIALIZED", UP_DEVICE_KIND_OTHER_AUDIO },
 		{ "ID_INPUT_TABLET", UP_DEVICE_KIND_TABLET },
 		{ "ID_INPUT_TOUCHPAD", UP_DEVICE_KIND_TOUCHPAD },
 		{ "ID_INPUT_MOUSE", UP_DEVICE_KIND_MOUSE },
@@ -342,15 +347,26 @@ up_device_supply_sibling_discovered (UpDevice *device,
 	/* The type priority if we have multiple siblings,
 	 * i.e. we select the first of the current type of the found type. */
 	UpDeviceKind priority[] = {
+		UP_DEVICE_KIND_OTHER_AUDIO,
 		UP_DEVICE_KIND_KEYBOARD,
 		UP_DEVICE_KIND_TABLET,
 		UP_DEVICE_KIND_TOUCHPAD,
 		UP_DEVICE_KIND_MOUSE,
 		UP_DEVICE_KIND_GAMING_INPUT,
 	};
-
-	if (!G_UDEV_IS_DEVICE (sibling))
-		return;
+	/* Form-factors set in rules.d/78-sound-card.rules in systemd */
+	struct {
+		const char *form_factor;
+		UpDeviceKind kind;
+	} sound_types[] = {
+		{ "webcam", UP_DEVICE_KIND_VIDEO },
+		{ "speaker", UP_DEVICE_KIND_SPEAKERS },
+		{ "headphone", UP_DEVICE_KIND_HEADPHONES },
+		{ "headset", UP_DEVICE_KIND_HEADSET },
+		/* unhandled:
+		 * - handset
+		 * - microphone */
+	};
 
 	input = G_UDEV_DEVICE (sibling);
 
@@ -359,7 +375,13 @@ up_device_supply_sibling_discovered (UpDevice *device,
 	if (cur_type == UP_DEVICE_KIND_LINE_POWER)
 		return;
 
-	if (g_strcmp0 (g_udev_device_get_subsystem (input), "input") != 0)
+	if (g_strcmp0 (g_udev_device_get_subsystem (input), "input") != 0 &&
+	    g_strcmp0 (g_udev_device_get_subsystem (input), "sound") != 0)
+		return;
+
+	/* Only process "card" devices, as those are tagged with form-factor */
+	if (g_str_equal (g_udev_device_get_subsystem (input), "sound") &&
+	    !g_str_has_prefix (g_udev_device_get_name (input), "card"))
 		return;
 
 	g_object_get (device,
@@ -367,24 +389,25 @@ up_device_supply_sibling_discovered (UpDevice *device,
 		      "serial", &serial_number,
 		      NULL);
 
-	if (model_name == NULL && serial_number == NULL) {
+	if (model_name == NULL) {
 		model_name = up_device_supply_get_string (input, "name");
-		serial_number = up_device_supply_get_string (input, "uniq");
-
 		up_make_safe_string (model_name);
-		up_make_safe_string (serial_number);
-
 		g_object_set (device,
 			      "model", model_name,
+			      NULL);
+		g_free (model_name);
+	}
+
+	if (serial_number == NULL) {
+		serial_number = up_device_supply_get_string (input, "uniq");
+		up_make_safe_string (serial_number);
+		g_object_set (device,
 			      "serial", serial_number,
 			      NULL);
-
-		g_free (model_name);
 		g_free (serial_number);
 	}
 
-	/* Fall back to "keyboard" if we don't find anything. */
-	new_type = UP_DEVICE_KIND_KEYBOARD;
+	new_type = UP_DEVICE_KIND_UNKNOWN;
 
 	for (i = 0; i < G_N_ELEMENTS (types); i++) {
 		if (g_udev_device_get_property_as_boolean (input, types[i].prop)) {
@@ -400,12 +423,82 @@ up_device_supply_sibling_discovered (UpDevice *device,
 		}
 	}
 
+	/* Match audio sub-type */
+	if (new_type == UP_DEVICE_KIND_OTHER_AUDIO) {
+		const char *form_factor = g_udev_device_get_property (input, "SOUND_FORM_FACTOR");
+		g_debug ("Guessing audio sub-type from SOUND_FORM_FACTOR='%s'", form_factor);
+		for (i = 0; form_factor != NULL && i < G_N_ELEMENTS (sound_types); i++) {
+			if (g_strcmp0 (form_factor, sound_types[i].form_factor) == 0) {
+				new_type = sound_types[i].kind;
+				break;
+			}
+		}
+	}
+
 	/* TODO: Add a heuristic here (and during initial discovery) that uses
 	 *       the model name.
 	 */
 
-	if (cur_type != new_type)
+	/* Fall back to "keyboard" if we didn't find anything. */
+	if (new_type == UP_DEVICE_KIND_UNKNOWN) {
+		if (cur_type != UP_DEVICE_KIND_UNKNOWN) {
+			g_debug ("Not overwriting existing type '%s'",
+				 up_device_kind_to_string(cur_type));
+			return;
+		}
+		new_type = UP_DEVICE_KIND_KEYBOARD;
+	}
+
+	if (cur_type != new_type) {
+		g_debug ("Type changed from %s to %s",
+			 up_device_kind_to_string(cur_type),
+			 up_device_kind_to_string(new_type));
 		g_object_set (device, "type", new_type, NULL);
+	}
+}
+
+static void
+up_device_supply_sibling_discovered_handle_wireless_status (UpDevice *device,
+							    GObject  *obj)
+{
+	const char *status;
+	GUdevDevice *sibling = G_UDEV_DEVICE (obj);
+
+	status = g_udev_device_get_sysfs_attr_uncached (sibling, "wireless_status");
+	if (!status)
+		return;
+
+	if (!g_str_equal (status, "connected") &&
+	    !g_str_equal (status, "disconnected")) {
+		g_warning ("Unhandled wireless_status value '%s' on %s",
+			   status, g_udev_device_get_sysfs_path (sibling));
+		return;
+	}
+
+	g_debug ("Detected wireless_status '%s' on %s",
+		 status, g_udev_device_get_sysfs_path (sibling));
+
+	g_object_set (G_OBJECT (device),
+		      "disconnected", g_str_equal (status, "disconnected"),
+		      NULL);
+}
+
+static void
+up_device_supply_sibling_discovered (UpDevice *device,
+				     GObject  *sibling)
+{
+	GUdevDevice *native;
+
+	if (!G_UDEV_IS_DEVICE (sibling))
+		return;
+
+	native = G_UDEV_DEVICE (up_device_get_native (device));
+	g_debug ("up_device_supply_sibling_discovered (device: %s, sibling: %s)",
+		 g_udev_device_get_sysfs_path (native),
+		 g_udev_device_get_sysfs_path (G_UDEV_DEVICE (sibling)));
+
+	up_device_supply_sibling_discovered_guess_type (device, sibling);
+	up_device_supply_sibling_discovered_handle_wireless_status (device, sibling);
 }
 
 static UpDeviceKind

@@ -30,7 +30,13 @@ variables:
     python3-pip
     python3-packaging
     git
+    clang
   LAST_ABI_BREAK: "9058d45685d1c7c08d52fb64c393fed9eeed542b"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_PIPELINE_SOURCE == 'push'
 
 stages:
   - check-source
@@ -62,7 +68,8 @@ build:
   # avoid recompiling in test stage
   artifacts:
     name: untracked
-    paths: [$(pwd)]
+    paths:
+     - "${CI_PROJECT_DIR}"
     expire_in: 3h30min
 
 
@@ -95,8 +102,23 @@ test:
   stage: test
   dependencies:
    - build
+  before_script:
+    - git clone https://github.com/zatrazz/glibc-tools.git
+    - cd glibc-tools
+    - ./configure
+    - make install
+    - cd ..
+    - git clone https://github.com/martinpitt/umockdev.git
+    - cd umockdev
+    - dnf install -y 'dnf-command(builddep)'
+    - dnf builddep -y umockdev
+    - meson _build -Dprefix=/usr
+    - ninja -C _build install
+    - cd ..
   script:
-    - meson test -C _build --print-errorlogs --no-stdsplit
+    - meson _build -Dintrospection=enabled -Dman=true -Dgtk-doc=true -Didevice=enabled
+    - ninja -C _build
+    - catchsegv meson test -C _build --print-errorlogs --no-stdsplit
     - .ci/fail_skipped_tests.py _build/meson-logs/testlog.junit.xml
 
   artifacts:
@@ -124,7 +146,8 @@ docs:
   dependencies:
    - build
   script:
-   - ninja -C _build/ UPower-doc
+    - meson _build -Dintrospection=enabled -Dman=true -Dgtk-doc=true -Didevice=enabled
+    - ninja -C _build/ UPower-doc
   artifacts:
     name: "docs"
     when: always

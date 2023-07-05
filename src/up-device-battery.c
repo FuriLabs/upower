@@ -125,7 +125,7 @@ up_device_battery_estimate_power (UpDeviceBattery *self, UpBatteryValues *cur)
 			continue;
 
 		/* Stop searching if the new reference is further away from the long timeout. */
-		if (abs(UP_DAEMON_LONG_TIMEOUT * G_USEC_PER_SEC - abs (td)) > abs(UP_DAEMON_SHORT_TIMEOUT * G_USEC_PER_SEC - ref_td))
+		if (ABS(UP_DAEMON_LONG_TIMEOUT * G_USEC_PER_SEC - ABS (td)) > ABS(UP_DAEMON_SHORT_TIMEOUT * G_USEC_PER_SEC - ref_td))
 			break;
 
 		ref_td = td;
@@ -155,7 +155,7 @@ up_device_battery_estimate_power (UpDeviceBattery *self, UpBatteryValues *cur)
 	 */
 	if (cur->state == UP_DEVICE_STATE_UNKNOWN) {
 		/* Consider a rate of 0.5W as "no change", otherwise set CHARGING/DISCHARGING */
-		if (abs(energy_rate) < 0.5)
+		if (ABS(energy_rate) < 0.5)
 			return;
 		else if (energy_rate < 0.0)
 			cur->state = UP_DEVICE_STATE_DISCHARGING;
@@ -169,7 +169,7 @@ up_device_battery_estimate_power (UpDeviceBattery *self, UpBatteryValues *cur)
 
 	/* This hopefully gives us sane values, but lets print a message if not. */
 	if (energy_rate < 0.1 || energy_rate > 300) {
-		g_message ("The estimated %scharge rate is %fW, which is not realistic",
+		g_debug ("The estimated %scharge rate is %fW, which is not realistic",
 			   cur->state == UP_DEVICE_STATE_DISCHARGING ? "dis" : "",
 			   energy_rate);
 		energy_rate = 0;
