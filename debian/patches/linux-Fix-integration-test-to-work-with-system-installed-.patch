@@ -1,0 +1,50 @@
+From: Michael Biebl <mbiebl@gmail.com>
+Date: Wed, 5 Jul 2023 15:30:47 +0000
+Subject: linux: Fix integration test to work with system installed upower
+ binary
+
+Fixes: 648abe9c2742 ("tests: Test a client running while daemon restarts")
+Closes: #241
+(cherry picked from commit dec946813675a98e350232724367fc695ec89ff3)
+---
+ src/linux/integration-test.py | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/linux/integration-test.py b/src/linux/integration-test.py
+index baec125..a06fe0d 100755
+--- a/src/linux/integration-test.py
++++ b/src/linux/integration-test.py
+@@ -102,6 +102,7 @@ class Tests(dbusmock.DBusTestCase):
+         builddir = os.getenv('top_builddir', '.')
+         if os.access(os.path.join(builddir, 'src', 'upowerd'), os.X_OK):
+             cls.daemon_path = os.path.join(builddir, 'src', 'upowerd')
++            cls.upower_path = os.path.join(builddir, 'tools', 'upower')
+             print('Testing binaries from local build tree')
+             cls.local_daemon = True
+         elif os.environ.get('UNDER_JHBUILD', False):
+@@ -112,12 +113,14 @@ class Tests(dbusmock.DBusTestCase):
+         else:
+             print('Testing installed system binaries')
+             cls.daemon_path = None
++            cls.upower_path = shutil.which('upower')
+             with open('/usr/share/dbus-1/system-services/org.freedesktop.UPower.service') as f:
+                 for line in f:
+                     if line.startswith('Exec='):
+                         cls.daemon_path = line.split('=', 1)[1].strip()
+                         break
+             assert cls.daemon_path, 'could not determine daemon path from D-BUS .service file'
++            assert cls.upower_path, 'could not determine upower path'
+             cls.local_daemon = False
+ 
+         # fail on CRITICALs on client side
+@@ -2514,9 +2517,8 @@ class Tests(dbusmock.DBusTestCase):
+         self.testbed.add_from_file(os.path.join(edir, 'tests/usb-headset.device'))
+         bat = '/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.3/0003:046D:0A87.0004/power_supply/hidpp_battery_0'
+ 
+-        upower_path = os.path.dirname(os.path.dirname(self.daemon_path)) + '/tools/upower'
+         self.start_daemon()
+-        process = subprocess.Popen([upower_path, '-m'])
++        process = subprocess.Popen([self.upower_path, '-m'])
+ 
+         for i in range(10):
+             # Replace daemon
