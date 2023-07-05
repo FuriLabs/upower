@@ -71,6 +71,8 @@ void		 up_device_sibling_discovered	(UpDevice	*device,
 						 GObject	*sibling);
 gboolean	 up_device_refresh_internal	(UpDevice	*device,
 						 UpRefreshReason reason);
+void		 up_device_unregister		(UpDevice	*device);
+void		 up_device_register		(UpDevice	*device);
 
 G_END_DECLS
 

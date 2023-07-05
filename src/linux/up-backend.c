@@ -116,13 +116,112 @@ up_backend_uevent_signal_handler_cb (GUdevClient *client, const gchar *action,
 	}
 }
 
+static UpDevice *
+find_duplicate_device (UpBackend *backend,
+		       UpDevice  *device)
+{
+	GPtrArray *array;
+	g_autofree char *serial = NULL;
+	UpDevice *ret = NULL;
+	guint i;
+
+	g_object_get (G_OBJECT (device), "serial", &serial, NULL);
+	if (!serial)
+		return NULL;
+
+	array = up_device_list_get_array (backend->priv->device_list);
+	for (i = 0; i < array->len; i++) {
+		g_autofree char *s = NULL;
+		UpDevice *d;
+
+		d = UP_DEVICE (g_ptr_array_index (array, i));
+		if (d == device)
+			continue;
+		g_object_get (G_OBJECT (d), "serial", &s, NULL);
+		if (s && g_ascii_strcasecmp (s, serial) == 0) {
+			ret = g_object_ref (d);
+			break;
+		}
+	}
+	g_ptr_array_unref (array);
+
+	return ret;
+}
+
+static void
+update_added_duplicate_device (UpBackend *backend,
+			       UpDevice  *added_device)
+{
+	g_autoptr(UpDevice) other_device = NULL;
+	UpDevice *bluez_device = NULL;
+	UpDevice *unreg_device = NULL;
+	g_autofree char *serial = NULL;
+
+	other_device = find_duplicate_device (backend, added_device);
+	if (!other_device)
+		return;
+
+	if (UP_IS_DEVICE_BLUEZ (added_device))
+		bluez_device = added_device;
+	else if (UP_IS_DEVICE_BLUEZ (other_device))
+		bluez_device = other_device;
+
+	if (bluez_device) {
+		UpDevice *non_bluez_device;
+
+		non_bluez_device = bluez_device == added_device ?
+			other_device : added_device;
+		g_object_bind_property (bluez_device, "model",
+					non_bluez_device, "model",
+					G_BINDING_SYNC_CREATE);
+		unreg_device = bluez_device;
+	} else {
+		UpDeviceState state;
+		UpDevice *tested_device;
+
+		tested_device = added_device;
+		g_object_get (G_OBJECT (tested_device), "state", &state, NULL);
+		if (state != UP_DEVICE_STATE_UNKNOWN) {
+			tested_device = other_device;
+			g_object_get (G_OBJECT (tested_device), "state", &state, NULL);
+		}
+		if (state != UP_DEVICE_STATE_UNKNOWN) {
+			g_object_get (G_OBJECT (added_device), "serial", &serial, NULL);
+			g_debug ("Device %s is a duplicate, but we don't know if most interesting",
+				 serial);
+			return;
+		}
+
+		unreg_device = tested_device;
+	}
+
+	g_object_get (G_OBJECT (unreg_device), "serial", &serial, NULL);
+	up_device_unregister (unreg_device);
+	g_debug ("Hiding duplicate device %s", serial);
+}
+
+static void
+update_removed_duplicate_device (UpBackend *backend,
+				 UpDevice  *removed_device)
+{
+	g_autoptr(UpDevice) other_device = NULL;
+
+	other_device = find_duplicate_device (backend, removed_device);
+	if (!other_device)
+		return;
+
+	/* Re-add the old duplicate device that got hidden */
+	up_device_register (other_device);
+}
+
 static gboolean
-is_battery_iface_proxy (GDBusProxy *interface_proxy)
+is_interesting_iface_proxy (GDBusProxy *interface_proxy)
 {
 	const char *iface;
 
 	iface = g_dbus_proxy_get_interface_name (interface_proxy);
-	return g_str_equal (iface, "org.bluez.Battery1");
+	return g_str_equal (iface, "org.bluez.Battery1") ||
+		g_str_equal (iface, "org.bluez.Device1");
 }
 
 static gboolean
@@ -149,7 +248,7 @@ bluez_proxies_changed (GDBusObjectManagerClient *manager,
 	GObject *object;
 	UpDeviceBluez *bluez;
 
-	if (!is_battery_iface_proxy (interface_proxy))
+	if (!is_interesting_iface_proxy (interface_proxy))
 		return;
 
 	object = up_device_list_lookup (backend->priv->device_list, G_OBJECT (object_proxy));
@@ -209,6 +308,7 @@ bluez_interface_added (GDBusObjectManager *manager,
 	                         NULL);
 	if (device) {
 		g_debug ("emitting device-added: %s", g_dbus_object_get_object_path (bus_object));
+		update_added_duplicate_device (backend, device);
 		g_signal_emit (backend, signals[SIGNAL_DEVICE_ADDED], 0, device);
 	}
 }
@@ -299,9 +399,33 @@ bluez_vanished (GDBusConnection *connection,
 }
 
 static void
+up_device_disconnected_cb (GObject    *gobject,
+			   GParamSpec *pspec,
+			   gpointer    user_data)
+{
+	g_autofree char *path = NULL;
+	gboolean disconnected;
+
+	g_object_get (gobject,
+		      "native-path", &path,
+		      "disconnected", &disconnected,
+		      NULL);
+	if (disconnected) {
+		g_debug("Device %s became disconnected, hiding device", path);
+		up_device_unregister (UP_DEVICE (gobject));
+	} else {
+		g_debug ("Device %s became connected, showing device", path);
+		up_device_register (UP_DEVICE (gobject));
+	}
+}
+
+static void
 udev_device_added_cb (UpBackend *backend, UpDevice *device)
 {
 	g_debug ("Got new device from udev enumerator: %p", device);
+	update_added_duplicate_device (backend, device);
+	g_signal_connect (device, "notify::disconnected",
+			  G_CALLBACK (up_device_disconnected_cb), backend);
 	g_signal_emit (backend, signals[SIGNAL_DEVICE_ADDED], 0, device);
 }
 
@@ -309,6 +433,7 @@ static void
 udev_device_removed_cb (UpBackend *backend, UpDevice *device)
 {
 	g_debug ("Removing device from udev enumerator: %p", device);
+	update_removed_duplicate_device (backend, device);
 	g_signal_emit (backend, signals[SIGNAL_DEVICE_REMOVED], 0, device);
 }
 
