@@ -1,8 +1,10 @@
-upower (1.90.1-1) UNRELEASED; urgency=medium
+upower (1.90.1-1) experimental; urgency=medium
 
   * New upstream version 1.90.1
+  * Use patch-numbers=False for gbp-pq
+  * linux: Fix integration test to work with system installed upower binary
 
- -- Michael Biebl <biebl@debian.org>  Wed, 05 Jul 2023 11:28:21 +0200
+ -- Michael Biebl <biebl@debian.org>  Wed, 05 Jul 2023 17:50:42 +0200
 
 upower (1.90.0-2) experimental; urgency=medium
 
