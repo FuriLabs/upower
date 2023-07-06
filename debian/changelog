@@ -1,8 +1,9 @@
-upower (1.90.2-1) UNRELEASED; urgency=medium
+upower (1.90.2-1) experimental; urgency=medium
 
   * New upstream version 1.90.2
+  * Drop patches, merged upstream
 
- -- Michael Biebl <biebl@debian.org>  Thu, 06 Jul 2023 11:34:29 +0200
+ -- Michael Biebl <biebl@debian.org>  Thu, 06 Jul 2023 15:14:44 +0200
 
 upower (1.90.1-1) experimental; urgency=medium
 
