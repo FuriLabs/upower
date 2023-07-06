@@ -102,22 +102,26 @@ class Tests(dbusmock.DBusTestCase):
         builddir = os.getenv('top_builddir', '.')
         if os.access(os.path.join(builddir, 'src', 'upowerd'), os.X_OK):
             cls.daemon_path = os.path.join(builddir, 'src', 'upowerd')
+            cls.upower_path = os.path.join(builddir, 'tools', 'upower')
             print('Testing binaries from local build tree')
             cls.local_daemon = True
         elif os.environ.get('UNDER_JHBUILD', False):
             jhbuild_prefix = os.environ['JHBUILD_PREFIX']
             cls.daemon_path = os.path.join(jhbuild_prefix, 'libexec', 'upowerd')
+            cls.upower_path = os.path.join(jhbuild_prefix, 'bin', 'upower')
             print('Testing binaries from JHBuild')
             cls.local_daemon = False
         else:
             print('Testing installed system binaries')
             cls.daemon_path = None
+            cls.upower_path = shutil.which('upower')
             with open('/usr/share/dbus-1/system-services/org.freedesktop.UPower.service') as f:
                 for line in f:
                     if line.startswith('Exec='):
                         cls.daemon_path = line.split('=', 1)[1].strip()
                         break
             assert cls.daemon_path, 'could not determine daemon path from D-BUS .service file'
+            assert cls.upower_path, 'could not determine upower path'
             cls.local_daemon = False
 
         # fail on CRITICALs on client side
@@ -320,6 +324,11 @@ class Tests(dbusmock.DBusTestCase):
             time.sleep(0.1)
         else:
             self.fail(message or 'timed out waiting for ' + str(condition))
+
+    def wait_for_mainloop(self):
+        ml = GLib.MainLoop()
+        GLib.timeout_add(100, ml.quit)
+        ml.run()
 
     #
     # Actual test cases
@@ -2463,6 +2472,7 @@ class Tests(dbusmock.DBusTestCase):
 
         self.testbed.add_from_file(os.path.join(edir, 'tests/steelseries-headset.device'))
         card = '/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5:1.0/sound/card1'
+        self.wait_for_mainloop()
 
         devs = self.proxy.EnumerateDevices()
         self.assertEqual(len(devs), 1)
@@ -2486,24 +2496,40 @@ class Tests(dbusmock.DBusTestCase):
         intf = '/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5:1.3'
         self.testbed.set_attribute(intf, 'wireless_status', 'connected')
 
+        num_devices = 0
+
         self.start_daemon()
 
         devs = self.proxy.EnumerateDevices()
-        self.assertEqual(len(devs), 1)
+        num_devices = len(devs)
+        self.assertEqual(num_devices, 1)
         headset_up = devs[0]
         self.assertEqual(self.get_dbus_dev_property(headset_up, 'Percentage'), 69.0)
 
+        client = UPowerGlib.Client.new()
+
+        def device_added_cb(client, device):
+            nonlocal num_devices
+            num_devices += 1
+        def device_removed_cb(client, path):
+            nonlocal num_devices
+            num_devices -= 1
+
+        client.connect('device-added', device_added_cb)
+        client.connect('device-removed', device_removed_cb)
+
         self.testbed.set_attribute(intf, 'wireless_status', 'disconnected')
         self.testbed.uevent(intf, 'change')
+        self.wait_for_mainloop()
 
-        devs = self.proxy.EnumerateDevices()
-        self.assertEqual(len(devs), 0)
+        self.assertEqual(num_devices, 0)
 
         self.testbed.set_attribute(intf, 'wireless_status', 'connected')
         self.testbed.uevent(intf, 'change')
+        self.wait_for_mainloop()
 
+        self.assertEqual(num_devices, 1)
         devs = self.proxy.EnumerateDevices()
-        self.assertEqual(len(devs), 1)
         headset_up = devs[0]
         self.assertEqual(self.get_dbus_dev_property(headset_up, 'Percentage'), 69.0)
 
@@ -2514,9 +2540,8 @@ class Tests(dbusmock.DBusTestCase):
         self.testbed.add_from_file(os.path.join(edir, 'tests/usb-headset.device'))
         bat = '/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.3/0003:046D:0A87.0004/power_supply/hidpp_battery_0'
 
-        upower_path = os.path.dirname(os.path.dirname(self.daemon_path)) + '/tools/upower'
         self.start_daemon()
-        process = subprocess.Popen([upower_path, '-m'])
+        process = subprocess.Popen([self.upower_path, '-m'])
 
         for i in range(10):
             # Replace daemon
