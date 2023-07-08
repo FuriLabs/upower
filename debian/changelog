@@ -1,3 +1,11 @@
+upower (1.90.2-2) experimental; urgency=medium
+
+  * Bump Build-Depends on libgudev-1.0-dev to (>= 238) (Closes: #1040642)
+  * Add new upower-tests package.
+    Update autopkgtest to use upower-tests for the integration test.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 08 Jul 2023 20:44:42 +0200
+
 upower (1.90.2-1) experimental; urgency=medium
 
   * New upstream version 1.90.2
