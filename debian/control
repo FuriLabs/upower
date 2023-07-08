@@ -57,6 +57,21 @@ Description: abstraction for power management - documentation
  .
  This package contains the API documentation.
 
+Package: upower-tests
+Architecture: any
+Depends: upower,
+         libupower-glib3 (= ${binary:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends},
+Recommends: gnome-desktop-testing,
+Description: abstraction for power management - test infrastructure
+ upower provides an interface to enumerate power sources on the system
+ and control system-wide power management. Any application can access the
+ org.freedesktop.UPower service on the system message bus. Some
+ operations (such as suspending the system) are restricted using PolicyKit.
+ .
+ This package contains installed test programs.
+
 Package: libupower-glib3
 Section: libs
 Architecture: any
