@@ -58,7 +58,7 @@ Description: abstraction for power management - documentation
  This package contains the API documentation.
 
 Package: upower-tests
-Architecture: any
+Architecture: linux-any
 Depends: upower,
          libupower-glib3 (= ${binary:Version}),
          ${misc:Depends},
