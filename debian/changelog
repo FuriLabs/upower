@@ -1,3 +1,18 @@
+upower (1.90.2-3) experimental; urgency=medium
+
+  [ Pino Toscano ]
+  * Make it build again on non-Linux architectures:
+    - backport upstream commit 029651a96dfc8e8e1dc6eca79bd3bf23d3aeb5ce to
+      install the udev files only on Linux
+    - d/rules: tweak the meson parameters to install the systemd files only
+      on Linux
+    - d/upower.install: restrict the systemd files only to Linux
+
+  [ Michael Biebl ]
+  * Bump Standards-Version to 4.6.2
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 11 Jul 2023 19:39:42 +0200
+
 upower (1.90.2-2) experimental; urgency=medium
 
   * Bump Build-Depends on libgudev-1.0-dev to (>= 238) (Closes: #1040642)
