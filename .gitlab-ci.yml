@@ -30,12 +30,20 @@ variables:
     python3-pip
     python3-packaging
     git
+    clang
   LAST_ABI_BREAK: "9058d45685d1c7c08d52fb64c393fed9eeed542b"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_PIPELINE_SOURCE == 'push'
+    - if: $CI_PIPELINE_SOURCE == 'schedule'
 
 stages:
   - check-source
   - build
   - test
+  - deploy
 
 image: $FEDORA_IMAGE
 
@@ -52,6 +60,14 @@ test_nut_hwdb:
 
 build:
   stage: build
+  before_script:
+    - git clone https://gitlab.gnome.org/GNOME/libgudev.git
+    - cd libgudev
+    - dnf install -y 'dnf-command(builddep)'
+    - dnf builddep -y libgudev
+    - meson _build -Dprefix=/usr
+    - ninja -C _build install
+    - cd ..
   script:
     - meson _build -Dintrospection=enabled -Dman=true -Dgtk-doc=true -Didevice=enabled
     - ninja -C _build
@@ -61,7 +77,8 @@ build:
   # avoid recompiling in test stage
   artifacts:
     name: untracked
-    paths: [$(pwd)]
+    paths:
+     - "${CI_PROJECT_DIR}"
     expire_in: 3h30min
 
 
@@ -94,8 +111,28 @@ test:
   stage: test
   dependencies:
    - build
+  before_script:
+    - git clone https://github.com/zatrazz/glibc-tools.git
+    - cd glibc-tools
+    - ./configure
+    - make install
+    - cd ..
+    - git clone https://github.com/martinpitt/umockdev.git
+    - cd umockdev
+    - dnf install -y 'dnf-command(builddep)'
+    - dnf builddep -y umockdev
+    - meson _build -Dprefix=/usr
+    - ninja -C _build install
+    - cd ..
+    - cd libgudev
+    - dnf builddep -y libgudev
+    - meson _build -Dprefix=/usr
+    - ninja -C _build install
+    - cd ..
   script:
-    - meson test -C _build --print-errorlogs --no-stdsplit
+    - meson _build -Dintrospection=enabled -Dman=true -Dgtk-doc=true -Didevice=enabled
+    - ninja -C _build
+    - catchsegv meson test -C _build --print-errorlogs --no-stdsplit
     - .ci/fail_skipped_tests.py _build/meson-logs/testlog.junit.xml
 
   artifacts:
@@ -109,12 +146,40 @@ test:
 
 check_abi:
   stage: test
+  before_script:
+    - cd libgudev
+    - dnf install -y 'dnf-command(builddep)'
+    - dnf builddep -y libgudev
+    - meson _build -Dprefix=/usr
+    - ninja -C _build install
+    - cd ..
   script:
     - check-abi --suppr .ci/upower.suppr --parameters="-Dman=false -Dgtk-doc=false -Didevice=enabled"  ${LAST_ABI_BREAK} $(git rev-parse HEAD)
   except:
     variables:
       - $CI_PIPELINE_SOURCE == "schedule"
 
+# Create docs artifact for the website.
+# Note that the last successful artifact build is always kept, so 1 day as
+# expiry is completely fine.
+docs:
+  stage: deploy
+  dependencies:
+   - build
+  script:
+    - meson _build -Dintrospection=enabled -Dman=true -Dgtk-doc=true -Didevice=enabled
+    - ninja -C _build/ UPower-doc
+  artifacts:
+    name: "docs"
+    when: always
+    expire_in: 1 day
+    paths:
+      - "_build/doc/html"
+  only:
+    - master
+  except:
+    variables:
+      - $CI_PIPELINE_SOURCE == "schedule"
 
 # CONTAINERS creation stage
 container_fedora_build:

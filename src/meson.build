@@ -31,6 +31,8 @@ upowerd_private = static_library('upowerd-private',
         'up-daemon.c',
         'up-device.h',
         'up-device.c',
+        'up-device-battery.h',
+        'up-device-battery.c',
         'up-device-list.h',
         'up-device-list.c',
         'up-enumerator.c',
@@ -137,7 +139,24 @@ if os_backend == 'linux' and gobject_introspection.found()
              args: ut_args,
              env: env,
              depends: [ libupower_glib_typelib, upowerd ],
-             timeout: 60,
+             timeout: 80,
             )
     endforeach
+
+    install_data( [
+        'linux/integration-test.py',
+        'linux/output_checker.py',
+      ],
+      install_dir: get_option('prefix') / get_option('libexecdir') / 'upower'
+    )
+    install_subdir('linux/tests/',
+      install_dir: get_option('prefix') / get_option('libexecdir') / 'upower'
+    )
+
+    configure_file(
+      input: 'upower-integration.test.in',
+      output: 'upower-integration.test',
+      install_dir: get_option('datadir') / 'installed-tests' / 'upower',
+      configuration: cdata
+    )
 endif

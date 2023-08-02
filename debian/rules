@@ -2,6 +2,14 @@
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
+include /usr/share/dpkg/architecture.mk
+
+ifeq (linux,$(DEB_HOST_ARCH_OS))
+EXTRA_MESON_ARGS += -Dsystemdsystemunitdir=/lib/systemd/system
+else
+EXTRA_MESON_ARGS += -Dsystemdsystemunitdir=no
+endif
+
 %:
 	dh $@
 
@@ -10,7 +18,7 @@ override_dh_auto_configure:
 		-Dman=true \
 		-Dgtk-doc=true \
 		-Dintrospection=enabled \
-		-Dsystemdsystemunitdir=/lib/systemd/system
+		$(EXTRA_MESON_ARGS)
 
 override_dh_auto_test:
 	# test suite needs system D-Bus and thus does not work on buildds

@@ -1,3 +1,54 @@
+upower (1.90.2-3) experimental; urgency=medium
+
+  [ Pino Toscano ]
+  * Make it build again on non-Linux architectures:
+    - backport upstream commit 029651a96dfc8e8e1dc6eca79bd3bf23d3aeb5ce to
+      install the udev files only on Linux
+    - d/rules: tweak the meson parameters to install the systemd files only
+      on Linux
+    - d/upower.install: restrict the systemd files only to Linux
+
+  [ Michael Biebl ]
+  * Bump Standards-Version to 4.6.2
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 11 Jul 2023 19:39:42 +0200
+
+upower (1.90.2-2) experimental; urgency=medium
+
+  * Bump Build-Depends on libgudev-1.0-dev to (>= 238) (Closes: #1040642)
+  * Add new upower-tests package.
+    Update autopkgtest to use upower-tests for the integration test.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 08 Jul 2023 20:44:42 +0200
+
+upower (1.90.2-1) experimental; urgency=medium
+
+  * New upstream version 1.90.2
+  * Drop patches, merged upstream
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 06 Jul 2023 15:14:44 +0200
+
+upower (1.90.1-1) experimental; urgency=medium
+
+  * New upstream version 1.90.1
+  * Use patch-numbers=False for gbp-pq
+  * linux: Fix integration test to work with system installed upower binary
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 05 Jul 2023 17:50:42 +0200
+
+upower (1.90.0-2) experimental; urgency=medium
+
+  * Recommend polkitd instead of the transitional policykit-1
+    (Closes: #1025587)
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 07 Dec 2022 13:28:24 +0100
+
+upower (1.90.0-1) experimental; urgency=medium
+
+  * New upstream version 1.90.0
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 31 Aug 2022 20:35:58 +0200
+
 upower (0.99.20-2) unstable; urgency=medium
 
   * Recommend polkitd instead of the transitional policykit-1

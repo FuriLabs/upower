@@ -111,7 +111,8 @@ up_daemon_get_number_devices_of_type (UpDaemon *daemon, UpDeviceKind type)
 		g_object_get (device,
 			      "type", &type_tmp,
 			      NULL);
-		if (type == type_tmp)
+		if (type == type_tmp &&
+		    up_device_get_object_path (device) != NULL)
 			count++;
 	}
 	g_ptr_array_unref (array);
@@ -438,8 +439,11 @@ up_daemon_enumerate_devices (UpExportedDaemon *skeleton,
 	object_paths = g_ptr_array_new_with_free_func (g_free);
 	array = up_device_list_get_array (daemon->priv->power_devices);
 	for (i = 0; i < array->len; i++) {
+		const char *object_path;
 		device = (UpDevice *) g_ptr_array_index (array, i);
-		g_ptr_array_add (object_paths, g_strdup (up_device_get_object_path (device)));
+		object_path = up_device_get_object_path (device);
+		if (object_path != NULL)
+			g_ptr_array_add (object_paths, g_strdup (object_path));
 	}
 	g_ptr_array_unref (array);
 	g_ptr_array_add (object_paths, NULL);
@@ -962,18 +966,18 @@ up_daemon_device_added_cb (UpBackend *backend, UpDevice *device, UpDaemon *daemo
 	g_signal_connect (device, "notify",
 			  G_CALLBACK (up_daemon_device_changed_cb), daemon);
 
+	/* emit */
+	object_path = up_device_get_object_path (device);
+	if (object_path == NULL) {
+		g_debug ("Device %s was unregistered before it was on the bus",
+			 up_exported_device_get_native_path (UP_EXPORTED_DEVICE (device)));
+		return;
+	}
+
 	/* Ensure we poll the new device if needed */
 	g_source_set_ready_time (daemon->priv->poll_source, 0);
 
-	/* emit */
-	object_path = up_device_get_object_path (device);
 	g_debug ("emitting added: %s", object_path);
-
-	/* don't crash the session */
-	if (object_path == NULL) {
-		g_warning ("INTERNAL STATE CORRUPT (device-added): not sending NULL, device:%p", device);
-		return;
-	}
 	up_daemon_update_warning_level (daemon);
 	up_exported_daemon_emit_device_added (UP_EXPORTED_DAEMON (daemon), object_path);
 }
@@ -997,13 +1001,14 @@ up_daemon_device_removed_cb (UpBackend *backend, UpDevice *device, UpDaemon *dae
 
 	/* emit */
 	object_path = up_device_get_object_path (device);
-	g_debug ("emitting device-removed: %s", object_path);
 
 	/* don't crash the session */
 	if (object_path == NULL) {
-		g_warning ("INTERNAL STATE CORRUPT (device-removed): not sending NULL, device:%p", device);
+		g_debug ("not emitting device-removed for unregistered device: %s",
+			 up_exported_device_get_native_path (UP_EXPORTED_DEVICE (device)));
 		return;
 	}
+	g_debug ("emitting device-removed: %s", object_path);
 	up_exported_daemon_emit_device_removed (UP_EXPORTED_DAEMON (daemon), object_path);
 
 	/* In case a battery was removed */

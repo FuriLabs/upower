@@ -45,6 +45,11 @@ typedef struct
 
 	gint64			last_refresh;
 	int			poll_timeout;
+
+	/* This is TRUE if the wireless_status property is present, and
+	 * its value is "disconnected"
+	 * See https://www.kernel.org/doc/html/latest/driver-api/usb/usb.html#c.usb_interface */
+	gboolean		disconnected;
 } UpDevicePrivate;
 
 static void up_device_initable_iface_init (GInitableIface *iface);
@@ -60,12 +65,15 @@ enum {
   PROP_NATIVE,
   PROP_LAST_REFRESH,
   PROP_POLL_TIMEOUT,
+  PROP_DISCONNECTED,
   N_PROPS
 };
 
 static GParamSpec *properties[N_PROPS];
 
 #define UP_DEVICES_DBUS_PATH "/org/freedesktop/UPower/devices"
+
+static gchar * up_device_get_id (UpDevice *device);
 
 /* This needs to be called when one of those properties changes:
  * state
@@ -161,10 +169,27 @@ update_icon_name (UpDevice *device)
 }
 
 static void
+ensure_history (UpDevice *device)
+{
+	UpDevicePrivate *priv = up_device_get_instance_private (device);
+	g_autofree char *id = NULL;
+
+	if (priv->history)
+		return;
+
+	priv->history = up_history_new ();
+	id = up_device_get_id (device);
+	if (id)
+		up_history_set_id (priv->history, id);
+}
+
+static void
 update_history (UpDevice *device)
 {
 	UpDevicePrivate *priv = up_device_get_instance_private (device);
 	UpExportedDevice *skeleton = UP_EXPORTED_DEVICE (device);
+
+	ensure_history (device);
 
 	/* save new history */
 	up_history_set_state (priv->history, up_exported_device_get_state (skeleton));
@@ -189,6 +214,12 @@ up_device_notify (GObject *object, GParamSpec *pspec)
 	if (g_strcmp0 (pspec->name, "type") == 0 ||
 	    g_strcmp0 (pspec->name, "is-present") == 0) {
 		update_icon_name (device);
+		/* Clearing the history object will force lazily loading. */
+		g_clear_object (&priv->history);
+	} else if (g_strcmp0 (pspec->name, "vendor") == 0 ||
+		   g_strcmp0 (pspec->name, "model") == 0 ||
+		   g_strcmp0 (pspec->name, "serial") == 0) {
+		g_clear_object (&priv->history);
 	} else if (g_strcmp0 (pspec->name, "power-supply") == 0 ||
 		   g_strcmp0 (pspec->name, "time-to-empty") == 0) {
 		update_warning_level (device);
@@ -398,13 +429,35 @@ up_device_compute_object_path (UpDevice *device)
 	return object_path;
 }
 
-static void
-up_device_register_device (UpDevice *device)
+gboolean
+up_device_register (UpDevice *device)
 {
-	char *object_path = up_device_compute_object_path (device);
-	g_debug ("object path = %s", object_path);
-	up_device_export_skeleton (device, object_path);
-	g_free (object_path);
+	g_autofree char *computed_object_path = NULL;
+
+	if (g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (device)) != NULL)
+		return FALSE;
+	computed_object_path = up_device_compute_object_path (device);
+	g_debug ("Exported UpDevice with path %s", computed_object_path);
+	up_device_export_skeleton (device, computed_object_path);
+	return TRUE;
+}
+
+void
+up_device_unregister (UpDevice *device)
+{
+	g_autofree char *object_path = NULL;
+
+	object_path = g_strdup (g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (device)));
+	if (object_path != NULL) {
+		g_dbus_interface_skeleton_unexport (G_DBUS_INTERFACE_SKELETON (device));
+		g_debug ("Unexported UpDevice with path %s", object_path);
+	}
+}
+
+gboolean
+up_device_is_registered (UpDevice *device)
+{
+	return g_dbus_interface_skeleton_get_object_path (G_DBUS_INTERFACE_SKELETON (device)) != NULL;
 }
 
 /**
@@ -431,7 +484,6 @@ up_device_initable_init (GInitable     *initable,
 	UpDevicePrivate *priv = up_device_get_instance_private (device);
 	const gchar *native_path = "DisplayDevice";
 	UpDeviceClass *klass = UP_DEVICE_GET_CLASS (device);
-	gchar *id = NULL;
 	int ret;
 
 	g_return_val_if_fail (UP_IS_DEVICE (device), FALSE);
@@ -466,16 +518,9 @@ up_device_initable_init (GInitable     *initable,
 		goto register_device;
 	}
 
-	/* get the id so we can load the old history */
-	id = up_device_get_id (device);
-	if (id != NULL) {
-		up_history_set_id (priv->history, id);
-		g_free (id);
-	}
-
 register_device:
 	/* put on the bus */
-	up_device_register_device (device);
+	up_device_register (device);
 
 	return TRUE;
 }
@@ -504,6 +549,8 @@ up_device_get_statistics (UpExportedDevice *skeleton,
 							       "device does not support getting stats");
 		goto out;
 	}
+
+	ensure_history (device);
 
 	/* get the correct data */
 	if (g_strcmp0 (type, "charging") == 0)
@@ -578,8 +625,10 @@ up_device_get_history (UpExportedDevice *skeleton,
 		type = UP_HISTORY_TYPE_TIME_EMPTY;
 
 	/* something recognised */
-	if (type != UP_HISTORY_TYPE_UNKNOWN)
+	if (type != UP_HISTORY_TYPE_UNKNOWN) {
+		ensure_history (device);
 		array = up_history_get_data (priv->history, type, timespan, resolution);
+	}
 
 	/* maybe the device doesn't have any history */
 	if (array == NULL) {
@@ -669,11 +718,7 @@ up_device_get_native (UpDevice *device)
 static void
 up_device_init (UpDevice *device)
 {
-	UpDevicePrivate *priv = up_device_get_instance_private (device);
 	UpExportedDevice *skeleton;
-
-	priv = up_device_get_instance_private (device);
-	priv->history = up_history_new ();
 
 	skeleton = UP_EXPORTED_DEVICE (device);
 	up_exported_device_set_battery_level (skeleton, UP_DEVICE_LEVEL_NONE);
@@ -691,7 +736,7 @@ up_device_finalize (GObject *object)
 
 	g_clear_object (&priv->native);
 	g_clear_object (&priv->daemon);
-	g_object_unref (priv->history);
+	g_clear_object (&priv->history);
 
 	G_OBJECT_CLASS (up_device_parent_class)->finalize (object);
 }
@@ -729,6 +774,10 @@ up_device_set_property (GObject      *object,
 		priv->poll_timeout = g_value_get_int (value);
 		break;
 
+	case PROP_DISCONNECTED:
+		priv->disconnected = g_value_get_boolean (value);
+		break;
+
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 	}
@@ -751,6 +800,10 @@ up_device_get_property (GObject      *object,
 
 	case PROP_LAST_REFRESH:
 		g_value_set_int64 (value, priv->last_refresh);
+		break;
+
+	case PROP_DISCONNECTED:
+		g_value_set_boolean (value, priv->disconnected);
 		break;
 
 	default:
@@ -801,6 +854,13 @@ up_device_class_init (UpDeviceClass *klass)
 		                    G_MAXINT64,
 		                    0,
 		                    G_PARAM_STATIC_STRINGS | G_PARAM_READABLE);
+
+	properties[PROP_DISCONNECTED] =
+		g_param_spec_boolean ("disconnected",
+		                      "Disconnected",
+		                      "Whethe wireless device is disconnected",
+		                      FALSE,
+		                      G_PARAM_STATIC_STRINGS | G_PARAM_WRITABLE | G_PARAM_READABLE);
 
 	g_object_class_install_properties (object_class, N_PROPS, properties);
 }

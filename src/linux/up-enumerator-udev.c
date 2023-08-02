@@ -18,6 +18,8 @@
  *
  */
 
+#include "config.h"
+
 #include <string.h>
 
 #include <gudev/gudev.h>
@@ -26,8 +28,12 @@
 #include "up-enumerator-udev.h"
 
 #include "up-device-supply.h"
+#include "up-device-supply-battery.h"
 #include "up-device-hid.h"
 #include "up-device-wup.h"
+#ifdef HAVE_IDEVICE
+#include "up-device-idevice.h"
+#endif /* HAVE_IDEVICE */
 
 struct _UpEnumeratorUdev {
 	UpEnumerator parent;
@@ -93,10 +99,19 @@ device_new (UpEnumeratorUdev *self, GUdevDevice *native)
 
 	subsys = g_udev_device_get_subsystem (native);
 	if (g_strcmp0 (subsys, "power_supply") == 0) {
-		return g_initable_new (UP_TYPE_DEVICE_SUPPLY, NULL, NULL,
+		UpDevice *device;
+
+		device = g_initable_new (UP_TYPE_DEVICE_SUPPLY_BATTERY, NULL, NULL,
 		                       "daemon", daemon,
 		                       "native", native,
 		                       "ignore-system-percentage", GPOINTER_TO_INT (is_macbook (NULL)),
+		                       NULL);
+		if (device)
+			return device;
+
+		return g_initable_new (UP_TYPE_DEVICE_SUPPLY, NULL, NULL,
+		                       "daemon", daemon,
+		                       "native", native,
 		                       NULL);
 
 	} else if (g_strcmp0 (subsys, "tty") == 0) {
@@ -105,6 +120,19 @@ device_new (UpEnumeratorUdev *self, GUdevDevice *native)
 		                       "native", native,
 		                       NULL);
 
+	} else if (g_strcmp0 (subsys, "usb") == 0) {
+#ifdef HAVE_IDEVICE
+		UpDevice *device;
+
+		device = g_initable_new (UP_TYPE_DEVICE_IDEVICE, NULL, NULL,
+		                         "daemon", daemon,
+		                         "native", native,
+		                         NULL);
+		if (device)
+			return device;
+#endif /* HAVE_IDEVICE */
+
+		return NULL;
 	} else if (g_strcmp0 (subsys, "usbmisc") == 0) {
 #ifdef HAVE_IDEVICE
 		UpDevice *device;
@@ -122,13 +150,54 @@ device_new (UpEnumeratorUdev *self, GUdevDevice *native)
 		                       "native", native,
 		                       NULL);
 
-	} else if (g_strcmp0 (subsys, "input") == 0) {
+	} else if (g_strcmp0 (subsys, "input") == 0 ||
+		   g_strcmp0 (subsys, "sound") == 0) {
 		/* Ignore, we only resolve them to see siblings. */
 		return NULL;
 	} else {
 		native_path = g_udev_device_get_sysfs_path (native);
 		g_warning ("native path %s (%s) ignoring", native_path, subsys);
 		return NULL;
+	}
+}
+
+/* As GUdevDevice are static and do not update when the sysfs device
+ * changes, this helps get a GUdevDevice with updated properties */
+static GUdevDevice *
+get_latest_udev_device (UpEnumeratorUdev *self,
+                        GObject          *obj)
+{
+	const char *sysfs_path;
+
+	sysfs_path = g_udev_device_get_sysfs_path (G_UDEV_DEVICE (obj));
+	return g_udev_client_query_by_sysfs_path (self->udev, sysfs_path);
+}
+
+static void
+emit_changes_for_siblings (UpEnumeratorUdev *self,
+			   GUdevDevice      *device)
+{
+	GPtrArray *devices = NULL;
+	g_autofree char *parent_id = NULL;
+	char *parent_id_key = NULL;
+	int i;
+
+	parent_id = device_parent_id (device);
+	if (!parent_id)
+		return;
+
+	g_hash_table_lookup_extended (self->siblings, parent_id,
+				      (gpointer*)&parent_id_key, (gpointer*)&devices);
+	if (!devices)
+		return;
+
+	for (i = 0; i < devices->len; i++) {
+		GObject *sibling = g_ptr_array_index (devices, i);
+
+		if (UP_IS_DEVICE (sibling)) {
+			up_device_sibling_discovered (UP_DEVICE (sibling), G_OBJECT (device));
+			break;
+		}
 	}
 }
 
@@ -139,6 +208,8 @@ uevent_signal_handler_cb (UpEnumeratorUdev *self,
                           GUdevClient      *client)
 {
 	const char *device_key = g_udev_device_get_sysfs_path (device);
+
+	g_debug ("Received uevent %s on device %s", action, device_key);
 
 	/* Work around the fact that we don't get a REMOVE event in some cases. */
 	if (g_strcmp0 (g_udev_device_get_subsystem (device), "power_supply") == 0)
@@ -193,8 +264,11 @@ uevent_signal_handler_cb (UpEnumeratorUdev *self,
 				for (i = 0; i < devices->len; i++) {
 					GObject *sibling = g_ptr_array_index (devices, i);
 
-					if (up_dev)
-						up_device_sibling_discovered (up_dev, sibling);
+					if (up_dev) {
+						g_autoptr(GUdevDevice) d = get_latest_udev_device (self, sibling);
+						if (d)
+							up_device_sibling_discovered (up_dev, G_OBJECT (d));
+					}
 					if (UP_IS_DEVICE (sibling))
 						up_device_sibling_discovered (UP_DEVICE (sibling), obj);
 				}
@@ -213,8 +287,12 @@ uevent_signal_handler_cb (UpEnumeratorUdev *self,
 				g_signal_emit_by_name (self, "device-added", up_dev);
 
 		} else {
-			if (!UP_IS_DEVICE (obj))
+			if (!UP_IS_DEVICE (obj)) {
+				g_autoptr(GUdevDevice) d = get_latest_udev_device (self, obj);
+				if (d)
+					emit_changes_for_siblings (self, d);
 				return;
+			}
 
 			g_debug ("refreshing device for path %s", g_udev_device_get_sysfs_path (device));
 			if (!up_device_refresh_internal (UP_DEVICE (obj), UP_REFRESH_EVENT))
@@ -274,8 +352,8 @@ up_enumerator_udev_initable_init (UpEnumerator *enumerator)
 	guint i;
 	const gchar **subsystems;
 	/* List "input" first just to avoid some sibling hotplugging later */
-	const gchar *subsystems_no_wup[] = {"input", "power_supply", "usbmisc", NULL};
-	const gchar *subsystems_wup[] = {"input", "power_supply", "usbmisc", "tty", NULL};
+	const gchar *subsystems_no_wup[] = {"input", "power_supply", "usb", "usbmisc", "sound", NULL};
+	const gchar *subsystems_wup[] = {"input", "power_supply", "usb", "usbmisc", "sound", "tty", NULL};
 
 	config = up_config_new ();
 	if (up_config_get_boolean (config, "EnableWattsUpPro"))
