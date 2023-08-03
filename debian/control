@@ -61,6 +61,7 @@ Package: upower-tests
 Architecture: linux-any
 Depends: upower,
          libupower-glib3 (= ${binary:Version}),
+         python3,
          ${misc:Depends},
          ${shlibs:Depends},
 Recommends: gnome-desktop-testing,
