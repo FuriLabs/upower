@@ -1,3 +1,16 @@
+upower (1.90.2-4) unstable; urgency=medium
+
+  [ Pino Toscano ]
+  * Make the upower-tests package as linux-any
+
+  [ Michael Biebl ]
+  * Switch debian-branch to debian/master
+  * Exclude .device files in /usr/libexec/upower/tests/ from dh_fixperms
+  * Add python3 Depends to upower-tests
+  * Upload to unstable (Closes: #1042914)
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 03 Aug 2023 14:24:33 +0200
+
 upower (1.90.2-3) experimental; urgency=medium
 
   [ Pino Toscano ]
