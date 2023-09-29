@@ -1,3 +1,13 @@
+upower (1.90.2-5) unstable; urgency=medium
+
+  * Remove __pycache__ directories in 'clean' target via debian/clean.
+    (Closes: #1048444)
+  * Ignore autopkgtest failure on i386.
+    This is a workaround until #1050436 has been addressed properly to allow
+    migration to testing.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 29 Sep 2023 11:30:18 +0200
+
 upower (1.90.2-4) unstable; urgency=medium
 
   [ Pino Toscano ]
