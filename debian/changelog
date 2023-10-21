@@ -1,3 +1,11 @@
+upower (1.90.2-6) unstable; urgency=medium
+
+  * Move systemd services files and udev rules/hwdb files to /usr.
+    Add a corresponding versioned Build-Depends on debhelper (>= 13.11.6) to
+    ensure we have a recent enough dh_installsystemd.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 21 Oct 2023 14:24:44 +0200
+
 upower (1.90.2-5) unstable; urgency=medium
 
   * Remove __pycache__ directories in 'clean' target via debian/clean.
