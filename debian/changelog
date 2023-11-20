@@ -1,3 +1,11 @@
+upower (1.90.2-7) unstable; urgency=medium
+
+  * Replace udev Build-Depends with systemd-dev.
+    The new systemd-dev package ships udev.pc, which is used to get
+    udevrulesdir and udevhwdbdir.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 20 Nov 2023 23:31:32 +0100
+
 upower (1.90.2-6) unstable; urgency=medium
 
   * Move systemd services files and udev rules/hwdb files to /usr.
