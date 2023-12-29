@@ -1,3 +1,10 @@
+upower (1.90.2-8) unstable; urgency=medium
+
+  * Adjust test_bluetooth_le_device for dbusmock 0.30.1.
+    Patch taken from upstream master. (Closes: #1059467)
+
+ -- Martin Pitt <mpitt@debian.org>  Fri, 29 Dec 2023 06:59:41 +0100
+
 upower (1.90.2-7) unstable; urgency=medium
 
   * Replace udev Build-Depends with systemd-dev.
