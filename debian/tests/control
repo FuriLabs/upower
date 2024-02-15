@@ -1,0 +1,16 @@
+Tests: installed-tests
+Depends: upower-tests,
+         python3-dbus,
+         python3-packaging,
+         python3-dbusmock,
+         gir1.2-upowerglib-1.0,
+         gir1.2-umockdev-1.0,
+         umockdev,
+         gnome-desktop-testing
+Restrictions: allow-stderr, skippable
+
+Tests: build
+Depends: libupower-glib-dev,
+         build-essential,
+         upower
+Restrictions: isolation-container

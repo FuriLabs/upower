@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+include /usr/share/dpkg/architecture.mk
+
+ifeq (linux,$(DEB_HOST_ARCH_OS))
+EXTRA_MESON_ARGS += \
+	-Dsystemdsystemunitdir=/usr/lib/systemd/system \
+	-Dudevrulesdir=/usr/lib/udev/rules.d \
+	-Dudevhwdbdir=/usr/lib/udev/hwdb.d
+else
+EXTRA_MESON_ARGS += -Dsystemdsystemunitdir=no
+endif
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-Dman=true \
+		-Dgtk-doc=true \
+		-Dintrospection=enabled \
+		$(EXTRA_MESON_ARGS)
+
+override_dh_auto_test:
+	# test suite needs system D-Bus and thus does not work on buildds
+
+override_dh_makeshlibs:
+	dh_makeshlibs -- -c4
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable
+
+override_dh_fixperms:
+	dh_fixperms -Xusr/libexec/upower/tests
