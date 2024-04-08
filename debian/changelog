@@ -1,3 +1,9 @@
+upower (1.90.3-1) UNRELEASED; urgency=medium
+
+  * New upstream version 1.90.3
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 08 Apr 2024 09:32:04 +0200
+
 upower (1.90.2-8) unstable; urgency=medium
 
   * Adjust test_bluetooth_le_device for dbusmock 0.30.1.
