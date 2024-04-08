@@ -21,7 +21,7 @@ Build-Depends: debhelper-compat (= 13),
                systemd-dev [linux-any],
                xsltproc,
 Build-Depends-Indep: libglib2.0-doc <!nodoc>,
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Vcs-Git: https://salsa.debian.org/utopia-team/upower.git
 Vcs-Browser: https://salsa.debian.org/utopia-team/upower/
