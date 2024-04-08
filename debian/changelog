@@ -1,8 +1,13 @@
-upower (1.90.3-1) UNRELEASED; urgency=medium
+upower (1.90.3-1) unstable; urgency=medium
 
   * New upstream version 1.90.3
+  * Drop patches, merged upstream
+  * Bump Build-Depends on meson to (>= 0.60.0) and libglib2.0-dev to (>= 2.66)
+    as per meson.build
+  * Switch Build-Depends on pkg-config to pkgconf
+  * Bump Standards-Version to 4.7.0
 
- -- Michael Biebl <biebl@debian.org>  Mon, 08 Apr 2024 09:32:04 +0200
+ -- Michael Biebl <biebl@debian.org>  Mon, 08 Apr 2024 09:42:45 +0200
 
 upower (1.90.2-8) unstable; urgency=medium
 
